@@ -1,0 +1,1077 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vid2Spatial Demo</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #111; color: #eee; min-height: 100vh; }
+  .container { max-width: 900px; margin: 0 auto; padding: 24px; }
+  h1 { color: #e94560; font-size: 1.6em; margin-bottom: 6px; }
+  h2 { color: #e94560; font-size: 1.1em; margin: 20px 0 10px; }
+  .subtitle { color: #666; font-size: 0.85em; margin-bottom: 24px; }
+
+  .step { background: #1a1a2e; border-radius: 10px; padding: 18px 20px; margin: 14px 0; border-left: 3px solid #e94560; }
+  .step-num { color: #e94560; font-weight: 700; font-size: 0.8em; letter-spacing: 1px; margin-bottom: 8px; }
+
+  .drop-zone { border: 2px dashed #444; border-radius: 8px; padding: 30px; text-align: center; cursor: pointer; transition: border-color 0.2s; color: #888; }
+  .drop-zone:hover, .drop-zone.drag { border-color: #e94560; color: #ccc; }
+  .drop-zone input { display: none; }
+
+  .upload-progress { margin-top: 10px; display: none; }
+  .progress-bar-wrap { background: #222; border-radius: 4px; height: 8px; overflow: hidden; }
+  .progress-bar-fill { height: 100%; background: #e94560; border-radius: 4px; transition: width 0.1s; width: 0%; }
+  .progress-text { color: #fbbf24; font-size: 0.82em; margin-top: 5px; }
+
+  .canvas-wrap { position: relative; display: inline-block; max-width: 100%; }
+  canvas { display: block; border-radius: 6px; cursor: crosshair; max-width: 100%; }
+  .canvas-hint { color: #666; font-size: 0.82em; margin-top: 6px; }
+
+  .file-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+  .file-label { background: #16213e; border: 1px solid #444; color: #ccc; padding: 8px 14px; border-radius: 6px; cursor: pointer; font-size: 0.9em; flex-shrink: 0; }
+  .file-label:hover { border-color: #e94560; color: #e94560; }
+  .file-label input { display: none; }
+  .file-name { color: #aaa; font-size: 0.85em; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-name.ok { color: #4ade80; }
+
+  select { background: #16213e; border: 1px solid #444; color: #eee; padding: 8px 12px; border-radius: 6px; font-size: 0.9em; width: 100%; max-width: 480px; cursor: pointer; }
+
+  .btn { display: inline-block; padding: 11px 26px; border-radius: 8px; border: none; font-size: 1em; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+  .btn-primary { background: #e94560; color: #fff; }
+  .btn-primary:hover { background: #c73e54; }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-secondary { background: #16213e; color: #e94560; border: 2px solid #e94560; }
+  .btn-secondary:hover { background: #e94560; color: #fff; }
+
+  .status-bar { background: #0d0d1a; border-radius: 6px; padding: 12px 16px; margin: 12px 0; font-size: 0.9em; color: #aaa; min-height: 42px; }
+  .status-bar.running { color: #fbbf24; }
+  .status-bar.done { color: #4ade80; }
+  .status-bar.error { color: #f87171; }
+
+  .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #fbbf24; border-top-color: transparent; border-radius: 50%; animation: spin 0.7s linear infinite; margin-right: 8px; vertical-align: middle; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .result-section { margin-top: 20px; }
+  .player-row { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+  .player-box { flex: 1; min-width: 260px; }
+  .player-box label { color: #888; font-size: 0.8em; display: block; margin-bottom: 6px; }
+  audio, video { width: 100%; border-radius: 6px; background: #000; }
+
+  .bbox-info { font-size: 0.8em; color: #888; margin-top: 4px; }
+  .reset-link { color: #888; font-size: 0.8em; cursor: pointer; margin-left: 10px; }
+  .reset-link:hover { color: #e94560; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>Vid2Spatial Demo</h1>
+  <p class="subtitle">Video BBox Tracking or Sketch Drawing → Binaural · FOA AmbiX · OSC Stream</p>
+
+  <!-- Mode tabs -->
+  <div style="display:flex; gap:0; margin-bottom:20px; border-bottom:2px solid #e94560;">
+    <button id="tab-video"  onclick="switchTab('video')"
+      style="padding:10px 28px; border:none; background:#e94560; color:#fff; font-size:0.95em; font-weight:600; cursor:pointer; border-radius:6px 6px 0 0; margin-right:4px;">
+      📹 Video + Bbox
+    </button>
+    <button id="tab-sketch" onclick="switchTab('sketch')"
+      style="padding:10px 28px; border:none; background:#1a1a2e; color:#e94560; font-size:0.95em; font-weight:600; cursor:pointer; border-radius:6px 6px 0 0; border:2px solid #e94560; border-bottom:none;">
+      ✏️ Sketch Draw
+    </button>
+  </div>
+
+  <!-- ══════════════ SKETCH MODE ══════════════ -->
+  <div id="mode-sketch" style="display:none;">
+
+    <div class="step">
+      <div class="step-num">SKETCH MODE — 3D Draw directly on the sphere to instantly convert to binaural audio</div>
+      <div style="font-size:0.82em; color:#666; margin-bottom:12px;">
+        Sphere drag = Azimuth/Elevation (Az/El) &nbsp;·&nbsp; Scroll = Distance &nbsp;·&nbsp; Stroke speed = Distance weight (fast=far, slow=near)
+      </div>
+
+      <!-- Three.js 3D sphere container -->
+      <div id="sk3d-wrap" style="position:relative; width:100%; height:360px; border-radius:6px; overflow:hidden; background:#07070f; touch-action:none; cursor:crosshair;">
+        <!-- Three.js renders into this div -->
+        <canvas id="sk3d-canvas" style="display:block; width:100%; height:100%;"></canvas>
+        <!-- HUD overlay -->
+        <div id="sk3d-hud" style="position:absolute; top:8px; left:10px; font-size:0.72em; color:#444; font-family:monospace; pointer-events:none; line-height:1.7;">
+          <span id="sk3d-az">Az —</span> &nbsp; <span id="sk3d-el">El —</span> &nbsp; <span id="sk3d-dist">Dist —</span>
+        </div>
+        <div style="position:absolute; top:8px; right:10px; font-size:0.68em; color:#2a2a40; font-family:monospace; pointer-events:none; line-height:1.6;">
+          FRONT<br>Scroll: dist
+        </div>
+      </div>
+
+      <!-- Stats row -->
+      <div style="display:flex; gap:20px; margin-top:8px; font-size:0.8em; color:#555; flex-wrap:wrap;">
+        <span>Points: <b id="sk-pts" style="color:#e94560;">0</b></span>
+        <span>Duration: <b id="sk-dur" style="color:#e94560;">0.0s</b></span>
+        <span>Az: <b id="sk-az" style="color:#e94560;">—</b></span>
+        <span>El: <b id="sk-el" style="color:#e94560;">—</b></span>
+        <span>Dist: <b id="sk-dist-val" style="color:#e94560;">1.0m</b></span>
+      </div>
+    </div>
+
+    <!-- Audio for sketch -->
+    <div class="step">
+      <div class="step-num">Audio Source (optional)</div>
+      <div style="margin-bottom:10px;">
+        <label style="display:block; color:#888; font-size:0.85em; margin-bottom:6px;">Upload my file (WAV/MP3)</label>
+        <div class="file-row">
+          <label class="file-label">
+            <input type="file" id="sk-audio-input" accept="audio/*">
+            Choose File
+          </label>
+          <span class="file-name" id="sk-audio-name">No selection → uses 440Hz sine wave</span>
+        </div>
+      </div>
+      <div>
+        <label style="display:block; color:#888; font-size:0.85em; margin-bottom:6px;">Or select from spatamb</label>
+        <select id="sk-audio-select" style="background:#16213e; border:1px solid #444; color:#eee; padding:8px 12px; border-radius:6px; font-size:0.9em; width:100%; max-width:480px;">
+          <option value="">— Loading... —</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Sketch Settings (mirrors Video Step 4) -->
+    <div class="step">
+      <div class="step-num">SETTINGS — Render Output &amp; OSC</div>
+      <div style="display:flex; gap:24px; flex-wrap:wrap; margin-bottom:14px; align-items:flex-start;">
+
+        <!-- Render Output -->
+        <div>
+          <div style="color:#888; font-size:0.82em; margin-bottom:6px;">Render Output</div>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:4px;">
+            <input type="checkbox" id="sk-render-binaural" checked disabled>
+            <span style="font-size:0.9em;">Binaural stereo <span style="color:#888; font-size:0.8em;">(always)</span></span>
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:4px;">
+            <input type="checkbox" id="sk-render-foa">
+            <span style="font-size:0.9em;">FOA 4ch <span style="color:#888; font-size:0.8em;">(AmbiX W/Y/Z/X)</span></span>
+          </label>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+            <input type="checkbox" id="sk-render-video">
+            <span style="font-size:0.9em;">Overlay Video <span style="color:#888; font-size:0.8em;">(sphere trajectory visualization)</span></span>
+          </label>
+        </div>
+
+        <!-- OSC Settings -->
+        <div style="flex:1; min-width:220px;">
+          <div style="color:#888; font-size:0.82em; margin-bottom:6px;">OSC Output</div>
+          <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:6px;">
+            <input type="checkbox" id="sk-osc-enable" onchange="skToggleOscFields()">
+            <span style="font-size:0.9em;">Enable</span>
+          </label>
+          <div id="sk-osc-fields" style="display:none;">
+            <div style="display:flex; gap:6px; margin-bottom:4px;">
+              <input id="sk-osc-host" type="text" value="127.0.0.1" placeholder="host"
+                style="background:#16213e; border:1px solid #444; color:#eee; padding:5px 8px; border-radius:5px; font-size:0.85em; width:130px;">
+              <input id="sk-osc-port" type="number" value="9001" placeholder="port"
+                style="background:#16213e; border:1px solid #444; color:#eee; padding:5px 8px; border-radius:5px; font-size:0.85em; width:70px;">
+            </div>
+            <select id="sk-osc-format" style="background:#16213e; border:1px solid #444; color:#eee; font-size:0.85em; padding:5px 8px; border-radius:5px; margin-bottom:4px; width:100%;">
+              <option value="maxmsp">Max/MSP  (/v2s/az, /v2s/el, ...)</option>
+              <option value="spat5">IRCAM Spat5  (/spat5/source/1/aed)</option>
+            </select>
+            <div style="color:#666; font-size:0.75em;">Max/MSP: /v2s/az  /v2s/el  /v2s/dist  /v2s/drel<br>Spat5: /spat5/source/1/aed [az el dist]</div>
+          </div>
+        </div>
+
+      </div>
+
+      <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+        <button class="btn btn-secondary" onclick="sketchClear()">Clear</button>
+        <button class="btn btn-primary" id="sk-render-btn" onclick="sketchRender()">▶ Render Binaural</button>
+        <button class="btn btn-secondary" id="sk-play-btn" style="display:none;" onclick="sketchPlayAgain()">⏵ Play Again</button>
+      </div>
+    </div>
+
+    <div class="status-bar" id="sk-status">Draw on the sphere, then click Render Binaural.</div>
+
+    <!-- Sketch results -->
+    <div class="result-section" id="sk-result-section" style="display:none;">
+      <h2>Result</h2>
+      <div class="player-row">
+        <div class="player-box">
+          <label>Binaural Audio (listen with headphones)</label>
+          <audio id="sk-player" controls style="width:100%;"></audio>
+        </div>
+        <div class="player-box" id="sk-video-box" style="display:none;">
+          <label>Overlay Video (sphere trajectory visualization)</label>
+          <video id="sk-result-video" controls style="width:100%; border-radius:6px; background:#000;"></video>
+        </div>
+      </div>
+      <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+        <a id="sk-dl-audio" class="btn btn-secondary" style="text-decoration:none; font-size:0.85em; padding:8px 16px;">⬇ sketch_binaural.wav</a>
+        <a id="sk-dl-foa"   class="btn btn-secondary" style="text-decoration:none; font-size:0.85em; padding:8px 16px; display:none;">⬇ sketch_foa.wav (4ch)</a>
+        <a id="sk-dl-video" class="btn btn-secondary" style="text-decoration:none; font-size:0.85em; padding:8px 16px; display:none;">⬇ sketch_overlay.mp4</a>
+      </div>
+    </div>
+
+  </div>
+  <!-- ══════════════ END SKETCH MODE ══════════════ -->
+
+  <!-- VIDEO MODE wrapper start -->
+  <div id="mode-video">
+
+  <!-- Step 1: Video -->
+  <div class="step">
+    <div class="step-num">STEP 1 — Upload Video</div>
+    <div class="drop-zone" id="drop-zone" onclick="document.getElementById('video-input').click()">
+      <input type="file" id="video-input" accept="video/*">
+      <div id="drop-text">Click or drag a video file here (mp4, mov, avi...)</div>
+    </div>
+    <div class="upload-progress" id="upload-progress">
+      <div class="progress-bar-wrap"><div class="progress-bar-fill" id="progress-fill"></div></div>
+      <div class="progress-text" id="progress-text">Uploading...</div>
+    </div>
+  </div>
+
+  <!-- Step 2: Draw bbox -->
+  <div class="step" id="step-bbox" style="display:none;">
+    <div class="step-num">STEP 2 — Draw Bounding Box of the object to track on the first frame</div>
+    <div class="canvas-wrap">
+      <canvas id="frame-canvas"></canvas>
+    </div>
+    <div class="bbox-info" id="bbox-info">Drag to draw a bounding box</div>
+    <p class="canvas-hint">Drag to draw box | Drag again to redraw</p>
+  </div>
+
+  <!-- Step 3: Audio -->
+  <div class="step" id="step-audio" style="display:none;">
+    <div class="step-num">STEP 3 — Select Mono Audio Source</div>
+
+    <div style="margin-bottom:12px;">
+      <label style="display:block; color:#888; font-size:0.85em; margin-bottom:6px;">Upload my file (mono WAV/MP3)</label>
+      <div class="file-row">
+        <label class="file-label">
+          <input type="file" id="audio-input" accept="audio/*">
+          Choose File
+        </label>
+        <span class="file-name" id="audio-file-name">No file selected</span>
+      </div>
+    </div>
+
+    <div>
+      <label style="display:block; color:#888; font-size:0.85em; margin-bottom:6px;">Or select from spatamb dataset</label>
+      <select id="audio-select">
+        <option value="">— Loading... —</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- Step 4: Run -->
+  <div class="step" id="step-run" style="display:none;">
+    <div class="step-num">STEP 4 — Settings &amp; Run</div>
+
+    <div style="display:flex; gap:24px; flex-wrap:wrap; margin-bottom:14px; align-items:flex-start;">
+
+      <!-- Tracking Mode -->
+      <div>
+        <div style="color:#888; font-size:0.82em; margin-bottom:6px;">Tracking Mode</div>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:4px;">
+          <input type="radio" name="track-mode" value="accurate" checked> <span style="font-size:0.9em;">Accurate <span style="color:#888; font-size:0.8em;">(SAM2, slow)</span></span>
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+          <input type="radio" name="track-mode" value="realtime"> <span style="font-size:0.9em;">Real-time <span style="color:#888; font-size:0.8em;">(ByteTrack, fast)</span></span>
+        </label>
+      </div>
+
+      <!-- Render Output -->
+      <div>
+        <div style="color:#888; font-size:0.82em; margin-bottom:6px;">Render Output</div>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:4px;">
+          <input type="checkbox" id="render-binaural" checked disabled> <span style="font-size:0.9em;">Binaural stereo <span style="color:#888; font-size:0.8em;">(always)</span></span>
+        </label>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+          <input type="checkbox" id="render-foa"> <span style="font-size:0.9em;">FOA 4ch <span style="color:#888; font-size:0.8em;">(AmbiX W/Y/Z/X)</span></span>
+        </label>
+      </div>
+
+      <!-- OSC Settings -->
+      <div style="flex:1; min-width:220px;">
+        <div style="color:#888; font-size:0.82em; margin-bottom:6px;">OSC Output</div>
+        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; margin-bottom:6px;">
+          <input type="checkbox" id="osc-enable" onchange="toggleOscFields()"> <span style="font-size:0.9em;">Enable</span>
+        </label>
+        <div id="osc-fields" style="display:none;">
+          <div style="display:flex; gap:6px; margin-bottom:4px;">
+            <input id="osc-host" type="text" value="127.0.0.1" placeholder="host"
+              style="background:#16213e; border:1px solid #444; color:#eee; padding:5px 8px; border-radius:5px; font-size:0.85em; width:130px;">
+            <input id="osc-port" type="number" value="9001" placeholder="port"
+              style="background:#16213e; border:1px solid #444; color:#eee; padding:5px 8px; border-radius:5px; font-size:0.85em; width:70px;">
+          </div>
+          <select id="osc-format" style="font-size:0.85em; padding:5px 8px; margin-bottom:4px;">
+            <option value="maxmsp">Max/MSP  (/v2s/az, /v2s/el, ...)</option>
+            <option value="spat5">IRCAM Spat5  (/spat5/source/1/aed)</option>
+          </select>
+          <div style="color:#666; font-size:0.75em;">Max/MSP: /v2s/az  /v2s/el  /v2s/dist  /v2s/drel<br>Spat5: /spat5/source/1/aed [az el dist]</div>
+        </div>
+      </div>
+
+    </div>
+
+    <button class="btn btn-primary" id="run-btn" onclick="runPipeline()">▶ Run Pipeline</button>
+    <span class="reset-link" onclick="resetAll()">From scratch</span>
+    <div class="status-bar" id="status-bar">Waiting</div>
+  </div>
+
+  <!-- Result -->
+  <div class="result-section" id="result-section" style="display:none;" >
+    <h2>Result</h2>
+    <div class="player-row">
+      <div class="player-box">
+        <label>Overlay Video (bbox · HUD · Azgraph)</label>
+        <video id="result-overlay" controls></video>
+      </div>
+      <div class="player-box">
+        <label>Binaural Audio + Overlay (listen with headphones)</label>
+        <video id="result-video" controls></video>
+      </div>
+    </div>
+    <div style="margin-top:12px; display:flex; gap:10px; flex-wrap:wrap;">
+      <a id="dl-audio" class="btn btn-secondary" style="text-decoration:none; font-size:0.85em; padding:8px 16px;">⬇ binaural.wav</a>
+      <a id="dl-foa" class="btn btn-secondary" style="text-decoration:none; font-size:0.85em; padding:8px 16px; display:none;">⬇ foa.wav (4ch)</a>
+      <a id="dl-overlay" class="btn btn-secondary" style="text-decoration:none; font-size:0.85em; padding:8px 16px;">⬇ overlay.mp4</a>
+    </div>
+  </div>
+
+  </div> <!-- end #mode-video -->
+</div>
+
+<script>
+// ── Tab switching ──────────────────────────────────────────────────────────────
+function switchTab(mode) {
+  document.getElementById('mode-video').style.display  = mode === 'video'  ? '' : 'none';
+  document.getElementById('mode-sketch').style.display = mode === 'sketch' ? '' : 'none';
+  const tabV = document.getElementById('tab-video');
+  const tabS = document.getElementById('tab-sketch');
+  if (mode === 'video') {
+    tabV.style.background = '#e94560'; tabV.style.color = '#fff';
+    tabS.style.background = '#1a1a2e'; tabS.style.color = '#e94560';
+  } else {
+    tabS.style.background = '#e94560'; tabS.style.color = '#fff';
+    tabV.style.background = '#1a1a2e'; tabV.style.color = '#e94560';
+    sketchInitCanvas();
+    loadSketchAudioSources();
+  }
+}
+
+// ── Sketch mode (Three.js 3D sphere) ──────────────────────────────────────────
+let skStroke    = [];   // [{az, el, dist_m, t}, ...]
+let skAudioPath = null;
+let sk3dInited  = false;
+
+// Three.js objects (module-scope after init)
+let sk3dRenderer, sk3dScene, sk3dCamera;
+let sk3dSphere, sk3dStrokeLine, sk3dCurrentDist = 2.0;
+let sk3dIsDrawing = false;
+let sk3dStrokeGeo, sk3dStrokeMat, sk3dStrokePoints = [];
+
+function sketchInitCanvas() {
+  if (sk3dInited) return;
+  sk3dInited = true;
+
+  // Dynamically load Three.js from CDN
+  const script = document.createElement('script');
+  script.src = 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js';
+  script.onload = _sk3dInit;
+  document.head.appendChild(script);
+}
+
+function _sk3dInit() {
+  const wrap   = document.getElementById('sk3d-wrap');
+  const canvas = document.getElementById('sk3d-canvas');
+
+  // Renderer
+  sk3dRenderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+  sk3dRenderer.setPixelRatio(window.devicePixelRatio);
+  sk3dRenderer.setClearColor(0x07070f, 1);
+
+  // Scene + camera
+  sk3dScene  = new THREE.Scene();
+  sk3dCamera = new THREE.PerspectiveCamera(50, wrap.clientWidth / wrap.clientHeight, 0.01, 100);
+  sk3dCamera.position.set(0, 0, 3.8);
+
+  // Resize
+  function onResize() {
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    sk3dRenderer.setSize(w, h);
+    sk3dCamera.aspect = w / h;
+    sk3dCamera.updateProjectionMatrix();
+  }
+  onResize();
+  new ResizeObserver(onResize).observe(wrap);
+
+  // Sphere (wireframe)
+  const sphGeo  = new THREE.SphereGeometry(1.5, 32, 24);
+  const sphMat  = new THREE.MeshBasicMaterial({ color: 0x1a1a40, wireframe: true, transparent: true, opacity: 0.4 });
+  sk3dSphere = new THREE.Mesh(sphGeo, sphMat);
+  sk3dScene.add(sk3dSphere);
+
+  // Equator ring
+  const ringGeo = new THREE.RingGeometry(1.49, 1.51, 64);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0x2a2a60, side: THREE.DoubleSide });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI / 2;
+  sk3dScene.add(ring);
+
+  // Front marker dot (az=0, el=0)
+  const dotGeo = new THREE.SphereGeometry(0.04, 8, 8);
+  const dotMat = new THREE.MeshBasicMaterial({ color: 0x333380 });
+  const frontDot = new THREE.Mesh(dotGeo, dotMat);
+  frontDot.position.set(0, 0, 1.5);
+  sk3dScene.add(frontDot);
+
+  // Axis labels (thin lines: front=+Z, right=+X, up=+Y)
+  function addLine(from, to, color) {
+    const geo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...from), new THREE.Vector3(...to)]);
+    sk3dScene.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color })));
+  }
+  addLine([0,0,0],[0,0,1.7], 0x22224a); // front (Z)
+  addLine([0,0,0],[1.7,0,0], 0x2a1a1a); // right (X)
+  addLine([0,0,0],[0,1.7,0], 0x1a2a1a); // up (Y)
+
+  // Cursor marker
+  const curGeo = new THREE.SphereGeometry(0.05, 8, 8);
+  const curMat = new THREE.MeshBasicMaterial({ color: 0xe94560 });
+  sk3dRenderer._cursor = new THREE.Mesh(curGeo, curMat);
+  sk3dRenderer._cursor.visible = false;
+  sk3dScene.add(sk3dRenderer._cursor);
+
+  // Current stroke line (LineSegments built dynamically)
+  sk3dStrokePoints = [];
+  _sk3dRebuildLine();
+
+  // Lighting
+  sk3dScene.add(new THREE.AmbientLight(0xffffff, 0.3));
+
+  // Animate
+  (function animate() { requestAnimationFrame(animate); sk3dRenderer.render(sk3dScene, sk3dCamera); })();
+
+  // Events
+  canvas.addEventListener('mousedown',  e => { sk3dIsDrawing = true; _sk3dOnStart(e); });
+  canvas.addEventListener('mousemove',  e => { if (sk3dIsDrawing) _sk3dOnMove(e); else _sk3dOnHover(e); });
+  canvas.addEventListener('mouseup',    () => { sk3dIsDrawing = false; });
+  canvas.addEventListener('mouseleave', () => { sk3dIsDrawing = false; sk3dRenderer._cursor.visible = false; });
+  canvas.addEventListener('touchstart', e => { e.preventDefault(); sk3dIsDrawing = true; _sk3dOnStart(e.touches[0]); }, {passive:false});
+  canvas.addEventListener('touchmove',  e => { e.preventDefault(); if (sk3dIsDrawing) _sk3dOnMove(e.touches[0]); }, {passive:false});
+  canvas.addEventListener('touchend',   () => { sk3dIsDrawing = false; });
+  canvas.addEventListener('wheel',      e => { e.preventDefault(); _sk3dOnScroll(e); }, {passive:false});
+}
+
+function _sk3dRaycast(e) {
+  const wrap   = document.getElementById('sk3d-wrap');
+  const rect   = wrap.getBoundingClientRect();
+  const mouse  = new THREE.Vector2(
+    ((e.clientX - rect.left)  / rect.width)  * 2 - 1,
+    -((e.clientY - rect.top) / rect.height) * 2 + 1,
+  );
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(mouse, sk3dCamera);
+  const hits = raycaster.intersectObject(sk3dSphere);
+  if (!hits.length) return null;
+  const pt = hits[0].point.clone().normalize(); // unit sphere normal
+  // az = atan2(x, z), el = asin(y) — standard spherical coords
+  const az = Math.atan2(pt.x, pt.z);
+  const el = Math.asin(Math.max(-1, Math.min(1, pt.y)));
+  return { az, el, point: hits[0].point.clone() };
+}
+
+function _sk3dGetVel(prevPt, currPt, dt) {
+  if (!prevPt) return 0.5;
+  const daz = currPt.az - prevPt.az;
+  const del = currPt.el - prevPt.el;
+  const angDist = Math.sqrt(daz*daz + del*del) * 180 / Math.PI; // deg/ms * ms => deg
+  return Math.min(1.0, angDist / Math.max(1, dt) * 30.0);
+}
+
+function _sk3dSpherePoint(az, el, r) {
+  // az=0 → front (+Z), az>0 → right (+X)
+  return new THREE.Vector3(
+    r * Math.sin(az) * Math.cos(el),
+    r * Math.sin(el),
+    r * Math.cos(az) * Math.cos(el),
+  );
+}
+
+function _sk3dRebuildLine() {
+  if (sk3dStrokeLine) { sk3dScene.remove(sk3dStrokeLine); sk3dStrokeLine.geometry.dispose(); }
+  if (sk3dStrokePoints.length < 2) return;
+  const pts = sk3dStrokePoints.map(p => _sk3dSpherePoint(p.az, p.el, 1.52 + (p.dist_m - 1) * 0.02));
+  const geo = new THREE.BufferGeometry().setFromPoints(pts);
+  const mat = new THREE.LineBasicMaterial({ color: 0xe94560, linewidth: 2 });
+  sk3dStrokeLine = new THREE.Line(geo, mat);
+  sk3dScene.add(sk3dStrokeLine);
+}
+
+function _sk3dOnHover(e) {
+  const hit = _sk3dRaycast(e);
+  if (!hit) { sk3dRenderer._cursor.visible = false; return; }
+  sk3dRenderer._cursor.visible = true;
+  const sp = _sk3dSpherePoint(hit.az, hit.el, 1.55);
+  sk3dRenderer._cursor.position.copy(sp);
+  document.getElementById('sk3d-hud').children[0].textContent =
+    `Az ${(hit.az * 180/Math.PI).toFixed(1)}°`;
+  document.getElementById('sk3d-hud').children[1].textContent =
+    `El ${(hit.el * 180/Math.PI).toFixed(1)}°`;
+  document.getElementById('sk3d-hud').children[2].textContent =
+    `Dist ${sk3dCurrentDist.toFixed(1)}m`;
+}
+
+function _sk3dOnStart(e) {
+  const hit = _sk3dRaycast(e);
+  if (!hit) return;
+  const t = performance.now();
+  const pt = { az: hit.az, el: hit.el, dist_m: sk3dCurrentDist, t };
+  skStroke.push(pt);
+  sk3dStrokePoints.push(pt);
+  _sk3dRebuildLine();
+  _skUpdateStats3d();
+}
+
+function _sk3dOnMove(e) {
+  const hit = _sk3dRaycast(e);
+  if (!hit) return;
+  const t    = performance.now();
+  const prev = skStroke.length ? skStroke[skStroke.length-1] : null;
+  const dt   = prev ? Math.max(1, t - prev.t) : 1;
+  const vel  = _sk3dGetVel(prev, hit, dt);  // used only for line color
+
+  // Distance = scroll-controlled value (d_rel derived from dist for renderer)
+  const dist_m = sk3dCurrentDist;
+  const d_rel  = Math.max(0, Math.min(1, (dist_m - 1.0) / 7.0));
+  const pt = { az: hit.az, el: hit.el, dist_m, t };
+
+  skStroke.push(pt);
+  sk3dStrokePoints.push(pt);
+  _sk3dRebuildLine();
+
+  // Update cursor
+  sk3dRenderer._cursor.visible = true;
+  sk3dRenderer._cursor.position.copy(_sk3dSpherePoint(hit.az, hit.el, 1.55));
+
+  // HUD
+  document.getElementById('sk3d-hud').children[0].textContent =
+    `Az ${(hit.az * 180/Math.PI).toFixed(1)}°`;
+  document.getElementById('sk3d-hud').children[1].textContent =
+    `El ${(hit.el * 180/Math.PI).toFixed(1)}°`;
+  document.getElementById('sk3d-hud').children[2].textContent =
+    `Dist ${dist_m.toFixed(1)}m`;
+
+  _skUpdateStats3d();
+}
+
+function _sk3dOnScroll(e) {
+  sk3dCurrentDist = Math.max(0.5, Math.min(8.0, sk3dCurrentDist + e.deltaY * 0.01));
+  document.getElementById('sk-dist-val').textContent = sk3dCurrentDist.toFixed(1) + 'm';
+  document.getElementById('sk3d-hud').children[2].textContent = `Dist ${sk3dCurrentDist.toFixed(1)}m`;
+}
+
+function _skUpdateStats3d() {
+  const n = skStroke.length;
+  document.getElementById('sk-pts').textContent = n;
+  if (n < 2) return;
+  const dur = ((skStroke[n-1].t - skStroke[0].t) / 1000).toFixed(1);
+  document.getElementById('sk-dur').textContent = dur + 's';
+  const azMin = Math.min(...skStroke.map(p => p.az)) * 180/Math.PI;
+  const azMax = Math.max(...skStroke.map(p => p.az)) * 180/Math.PI;
+  const elMin = Math.min(...skStroke.map(p => p.el)) * 180/Math.PI;
+  const elMax = Math.max(...skStroke.map(p => p.el)) * 180/Math.PI;
+  document.getElementById('sk-az').textContent = `${azMin.toFixed(0)}°→${azMax.toFixed(0)}°`;
+  document.getElementById('sk-el').textContent = `${elMin.toFixed(0)}°→${elMax.toFixed(0)}°`;
+}
+
+function sketchClear() {
+  skStroke = [];
+  sk3dStrokePoints = [];
+  _sk3dRebuildLine();
+  // Stop audio
+  const p = document.getElementById('sk-player');
+  p.pause(); p.currentTime = 0;
+  if (skWavUrl) { URL.revokeObjectURL(skWavUrl); skWavUrl = null; }
+  document.getElementById('sk-pts').textContent  = '0';
+  document.getElementById('sk-dur').textContent  = '0.0s';
+  document.getElementById('sk-az').textContent   = '—';
+  document.getElementById('sk-el').textContent   = '—';
+  document.getElementById('sk-status').textContent = 'Sphere cleared. Draw again.';
+  document.getElementById('sk-play-btn').style.display = 'none';
+}
+
+function skToggleOscFields() {
+  const en = document.getElementById('sk-osc-enable').checked;
+  document.getElementById('sk-osc-fields').style.display = en ? 'block' : 'none';
+}
+
+let skWavUrl = null, skFoaUrl = null, skVideoUrl = null;
+
+async function sketchRender() {
+  if (skStroke.length < 2) {
+    document.getElementById('sk-status').textContent = 'Please draw a stroke on the sphere first.'; return;
+  }
+  const btn = document.getElementById('sk-render-btn');
+  btn.disabled = true; btn.textContent = 'Rendering...';
+  document.getElementById('sk-status').textContent = 'HRTF Rendering...';
+
+  const audioSrc  = skAudioPath || document.getElementById('sk-audio-select').value || null;
+  const wantFoa   = document.getElementById('sk-render-foa').checked;
+  const wantVideo = document.getElementById('sk-render-video').checked;
+  const oscEn     = document.getElementById('sk-osc-enable').checked;
+
+  // Apply OSC config to server
+  if (oscEn) {
+    await fetch('/api/osc_config', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        enabled: true,
+        host:   document.getElementById('sk-osc-host').value,
+        port:   parseInt(document.getElementById('sk-osc-port').value),
+        format: document.getElementById('sk-osc-format').value,
+      }),
+    }).catch(() => {});
+  }
+
+  try {
+    const resp = await fetch('/api/sketch_render', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        stroke_3d:   skStroke.map(p => ({az: p.az, el: p.el, dist_m: p.dist_m, t: p.t})),
+        audio_src:   audioSrc,
+        render_foa:  wantFoa,
+        render_video: wantVideo,
+        osc_enabled: oscEn,
+      }),
+    });
+    if (!resp.ok) {
+      const e = await resp.json().catch(() => ({error:'Unknown'}));
+      throw new Error(e.error || `HTTP ${resp.status}`);
+    }
+    const data = await resp.json();
+
+    // Binaural WAV
+    if (skWavUrl) URL.revokeObjectURL(skWavUrl);
+    const wavResp = await fetch(data.binaural_url);
+    const wavBlob = await wavResp.blob();
+    skWavUrl = URL.createObjectURL(wavBlob);
+    const player = document.getElementById('sk-player');
+    player.src = skWavUrl; player.load();
+    await player.play().catch(() => {});
+    document.getElementById('sk-dl-audio').href = skWavUrl;
+    document.getElementById('sk-dl-audio').download = 'sketch_binaural.wav';
+
+    // FOA
+    const foaEl = document.getElementById('sk-dl-foa');
+    if (data.foa_url) {
+      if (skFoaUrl) URL.revokeObjectURL(skFoaUrl);
+      const foaResp = await fetch(data.foa_url);
+      skFoaUrl = URL.createObjectURL(await foaResp.blob());
+      foaEl.href = skFoaUrl; foaEl.download = 'sketch_foa.wav';
+      foaEl.style.display = 'inline-block';
+    } else { foaEl.style.display = 'none'; }
+
+    // Overlay video
+    const vidBox = document.getElementById('sk-video-box');
+    const vidEl  = document.getElementById('sk-result-video');
+    const dlVid  = document.getElementById('sk-dl-video');
+    if (data.video_url) {
+      if (skVideoUrl) URL.revokeObjectURL(skVideoUrl);
+      const vResp = await fetch(data.video_url);
+      skVideoUrl = URL.createObjectURL(await vResp.blob());
+      vidEl.src = skVideoUrl;
+      vidBox.style.display = 'block';
+      dlVid.href = skVideoUrl; dlVid.download = 'sketch_overlay.mp4';
+      dlVid.style.display = 'inline-block';
+    } else { vidBox.style.display = 'none'; dlVid.style.display = 'none'; }
+
+    document.getElementById('sk-result-section').style.display = 'block';
+    document.getElementById('sk-play-btn').style.display = 'inline-block';
+    document.getElementById('sk-status').textContent =
+      `✓ Playing (${(wavBlob.size/1024).toFixed(0)} KB binaural` +
+      (data.foa_url ? ' + FOA' : '') + (data.video_url ? ' + Video' : '') +
+      ') — Listen with headphones!';
+  } catch(e) {
+    document.getElementById('sk-status').textContent = 'Error: ' + e.message;
+    console.error(e);
+  } finally {
+    btn.disabled = false; btn.textContent = '▶ Render Binaural';
+  }
+}
+
+function sketchPlayAgain() {
+  const p = document.getElementById('sk-player');
+  if (!p.src) return;
+  p.currentTime = 0; p.play();
+}
+
+function loadSketchAudioSources() {
+  fetch('/api/audio_sources').then(r => r.json()).then(d => {
+    const sel = document.getElementById('sk-audio-select');
+    sel.innerHTML = '<option value="">— 440Hz Sine wave —</option>';
+    for (const s of d.sources) {
+      const opt = document.createElement('option');
+      opt.value = s.path; opt.textContent = s.label; sel.appendChild(opt);
+    }
+  }).catch(() => {});
+}
+
+document.getElementById('sk-audio-input').addEventListener('change', function() {
+  const file = this.files[0]; if (!file) return;
+  const fd = new FormData(); fd.append('audio', file, file.name);
+  fetch('/api/upload_audio?job_id=sketch', {method:'POST', body:fd})
+    .then(r => r.json()).then(d => {
+      if (d.error) { alert(d.error); return; }
+      skAudioPath = d.audio_path;
+      document.getElementById('sk-audio-name').textContent = file.name;
+      document.getElementById('sk-audio-select').value = '';
+    });
+});
+
+// ── Video mode ─────────────────────────────────────────────────────────────────
+let jobId = null;
+let uploadedAudioPath = null;  // server-side path for uploaded audio
+let pollTimer = null;
+
+// ── Drop zone ──────────────────────────────────────────────────────────────────
+const dropZone = document.getElementById('drop-zone');
+const videoInput = document.getElementById('video-input');
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f && f.type.startsWith('video/')) uploadVideo(f);
+});
+videoInput.addEventListener('change', () => {
+  if (videoInput.files[0]) uploadVideo(videoInput.files[0]);
+});
+
+function uploadVideo(file) {
+  const dropZoneEl = document.getElementById('drop-zone');
+  const progressEl = document.getElementById('upload-progress');
+  const fillEl     = document.getElementById('progress-fill');
+  const textEl     = document.getElementById('progress-text');
+
+  dropZoneEl.style.pointerEvents = 'none';
+  progressEl.style.display = 'block';
+  fillEl.style.width = '0%';
+  document.getElementById('drop-text').textContent = `${file.name}`;
+  textEl.textContent = 'Preparing upload...';
+
+  const fd = new FormData();
+  fd.append('video', file, file.name);
+
+  const xhr = new XMLHttpRequest();
+  xhr.open('POST', '/api/upload');
+
+  xhr.upload.onprogress = e => {
+    if (e.lengthComputable) {
+      const pct = Math.round(e.loaded / e.total * 100);
+      fillEl.style.width = pct + '%';
+      const mb = (e.loaded / 1048576).toFixed(1);
+      const total = (e.total / 1048576).toFixed(1);
+      textEl.textContent = `Uploading... ${pct}% (${mb} / ${total} MB)`;
+    }
+  };
+
+  xhr.onload = () => {
+    dropZoneEl.style.pointerEvents = '';
+    let d;
+    try { d = JSON.parse(xhr.responseText); } catch(e) { alert('Server response error'); return; }
+    if (d.error) {
+      progressEl.style.display = 'none';
+      document.getElementById('drop-text').textContent = 'Click or drag a video file here (mp4, mov, avi...)';
+      alert('Upload failed: ' + d.error); return;
+    }
+    fillEl.style.width = '100%';
+    textEl.style.color = '#4ade80';
+    textEl.textContent = `✓ Upload complete (${(file.size/1048576).toFixed(1)} MB)`;
+    jobId = d.job_id;
+    showFirstFrame(d.frame, d.width, d.height);
+    document.getElementById('step-bbox').style.display = 'block';
+    document.getElementById('step-audio').style.display = 'block';
+    document.getElementById('step-run').style.display = 'block';
+    loadAudioSources();
+  };
+
+  xhr.onerror = () => {
+    dropZoneEl.style.pointerEvents = '';
+    progressEl.style.display = 'none';
+    alert('Upload failed: Network error');
+  };
+
+  xhr.send(fd);
+}
+
+// ── Canvas bbox ─────────────────────────────────────────────────────────────────
+let bbox = null;  // {x, y, w, h} in original video coords
+let drawing = false, startX, startY;
+
+let bboxListenersAttached = false;
+function showFirstFrame(b64, vidW, vidH) {
+  const canvas = document.getElementById('frame-canvas');
+  const img = new Image();
+  img.onload = () => {
+    const maxW = Math.min(760, window.innerWidth - 80);
+    const maxH = Math.min(540, window.innerHeight - 200);
+    const scale = Math.min(1, maxW / vidW, maxH / vidH);
+    canvas.width  = Math.round(vidW * scale);
+    canvas.height = Math.round(vidH * scale);
+    canvas._scale = scale;
+    canvas._img   = img;
+    canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+  };
+  img.src = 'data:image/jpeg;base64,' + b64;
+
+  if (!bboxListenersAttached) {
+    canvas.addEventListener('mousedown', onDown);
+    canvas.addEventListener('mousemove', onMove);
+    canvas.addEventListener('mouseup',   onUp);
+    canvas.addEventListener('touchstart', e => { e.preventDefault(); onDown(e.touches[0]); }, {passive:false});
+    canvas.addEventListener('touchmove',  e => { e.preventDefault(); onMove(e.touches[0]); }, {passive:false});
+    canvas.addEventListener('touchend',   e => { e.preventDefault(); onUp(e.changedTouches[0]); }, {passive:false});
+    bboxListenersAttached = true;
+  }
+}
+
+function canvasXY(e) {
+  const canvas = document.getElementById('frame-canvas');
+  const rect = canvas.getBoundingClientRect();
+  // CSS display size may differ from canvas pixel size (max-width:100%)
+  const scaleX = canvas.width  / rect.width;
+  const scaleY = canvas.height / rect.height;
+  return {
+    x: (e.clientX - rect.left) * scaleX,
+    y: (e.clientY - rect.top)  * scaleY,
+  };
+}
+
+function onDown(e) {
+  const {x, y} = canvasXY(e);
+  drawing = true; startX = x; startY = y; bbox = null;
+}
+function onMove(e) {
+  if (!drawing) return;
+  const {x, y} = canvasXY(e);
+  redrawCanvas(startX, startY, x, y);
+}
+function onUp(e) {
+  if (!drawing) return;
+  drawing = false;
+  const {x, y} = canvasXY(e);
+  const canvas = document.getElementById('frame-canvas');
+  const s = canvas._scale || 1;
+  const rx = Math.min(startX, x), ry = Math.min(startY, y);
+  const rw = Math.abs(x - startX), rh = Math.abs(y - startY);
+  if (rw < 5 || rh < 5) return;
+  bbox = { x: Math.round(rx/s), y: Math.round(ry/s), w: Math.round(rw/s), h: Math.round(rh/s) };
+  document.getElementById('bbox-info').textContent =
+    `Bbox: x=${bbox.x}, y=${bbox.y}, w=${bbox.w}, h=${bbox.h}`;
+  redrawCanvas(startX, startY, startX+rw, startY+rh);
+}
+function redrawCanvas(x1, y1, x2, y2) {
+  const canvas = document.getElementById('frame-canvas');
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(canvas._img, 0, 0, canvas.width, canvas.height);
+  ctx.strokeStyle = '#e94560'; ctx.lineWidth = 2;
+  ctx.strokeRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1));
+  ctx.fillStyle = 'rgba(233,69,96,0.15)';
+  ctx.fillRect(Math.min(x1,x2), Math.min(y1,y2), Math.abs(x2-x1), Math.abs(y2-y1));
+}
+
+// ── Audio sources ──────────────────────────────────────────────────────────────
+function loadAudioSources() {
+  fetch('/api/audio_sources').then(r => r.json()).then(d => {
+    const sel = document.getElementById('audio-select');
+    sel.innerHTML = '<option value="">— spatambSelect from —</option>';
+    for (const s of d.sources) {
+      const opt = document.createElement('option');
+      opt.value = s.path; opt.textContent = s.label;
+      sel.appendChild(opt);
+    }
+  });
+}
+
+document.getElementById('audio-input').addEventListener('change', function() {
+  const file = this.files[0];
+  if (!file) return;
+  // Upload audio to server
+  document.getElementById('audio-file-name').textContent = `Uploading...`;
+  const fd = new FormData();
+  fd.append('video', new Blob([]), 'dummy.mp4');  // dummy — we'll handle audio upload separately
+  // Actually just store locally and send path after upload via separate endpoint
+  // Simpler: save to job dir via form upload
+  const fd2 = new FormData();
+  fd2.append('audio', file, file.name);
+  fetch('/api/upload_audio?job_id=' + jobId, { method: 'POST', body: fd2 })
+    .then(r => r.json())
+    .then(d => {
+      if (d.error) { alert(d.error); return; }
+      uploadedAudioPath = d.audio_path;
+      document.getElementById('audio-file-name').textContent = file.name;
+      document.getElementById('audio-file-name').className = 'file-name ok';
+      document.getElementById('audio-select').value = '';
+    }).catch(() => {
+      document.getElementById('audio-file-name').textContent = 'Upload failed';
+    });
+});
+
+// ── Run ────────────────────────────────────────────────────────────────────────
+function toggleOscFields() {
+  const en = document.getElementById('osc-enable').checked;
+  document.getElementById('osc-fields').style.display = en ? 'block' : 'none';
+}
+
+async function applyOscConfig() {
+  const enabled = document.getElementById('osc-enable').checked;
+  if (!enabled) return;
+  await fetch('/api/osc_config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      enabled: true,
+      host:   document.getElementById('osc-host').value,
+      port:   parseInt(document.getElementById('osc-port').value),
+      format: document.getElementById('osc-format').value,
+    })
+  });
+}
+
+function runPipeline() {
+  if (!jobId) { alert('Please upload a video first.'); return; }
+  if (!bbox)  {
+    const canvas = document.getElementById('frame-canvas');
+    const s = canvas._scale || 1;
+    const cw = canvas.width / s, ch = canvas.height / s;
+    bbox = { x: Math.round(cw/3), y: Math.round(ch/4), w: Math.round(cw/3), h: Math.round(ch/2) };
+    document.getElementById('bbox-info').textContent =
+      `⚠ bbox Not set → using center default: x=${bbox.x}, y=${bbox.y}, w=${bbox.w}, h=${bbox.h}`;
+  }
+
+  const audioSrc = uploadedAudioPath || document.getElementById('audio-select').value;
+  if (!audioSrc) { alert('Please select or upload an audio source.'); return; }
+
+  const mode      = document.querySelector('input[name="track-mode"]:checked').value;
+  const renderFoa = document.getElementById('render-foa').checked;
+
+  document.getElementById('run-btn').disabled = true;
+  document.getElementById('result-section').style.display = 'none';
+  setStatus('queued', 'Added to queue...');
+
+  applyOscConfig().then(() => {});
+
+  fetch('/api/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      job_id: jobId,
+      bbox: [bbox.x, bbox.y, bbox.w, bbox.h],
+      audio_src: audioSrc,
+      mode: mode,
+      render_foa: renderFoa,
+    })
+  })
+  .then(r => r.json())
+  .then(d => {
+    if (d.error) { setStatus('error', d.error); document.getElementById('run-btn').disabled = false; return; }
+    startPolling();
+  })
+  .catch(e => { setStatus('error', String(e)); document.getElementById('run-btn').disabled = false; });
+}
+
+function startPolling() {
+  if (pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => {
+    fetch('/api/status?job_id=' + jobId)
+      .then(r => r.json())
+      .then(d => {
+        const STATUS_LABELS = {
+          queued: 'Waiting...',
+          extracting_frames: 'Extracting frames...',
+          tracking: 'Tracking object + computing trajectory... (1–2 min)',
+          rendering: 'Binaural Rendering...',
+          rendering_foa: 'FOA 4ch Rendering...',
+          rendering_overlay: 'Overlay Video Generating...',
+          done: 'Done!',
+          error: 'Error occurred',
+        };
+        setStatus(d.status, STATUS_LABELS[d.status] || d.status);
+        if (d.status === 'done') {
+          clearInterval(pollTimer);
+          document.getElementById('run-btn').disabled = false;
+          showResult(d.result);
+        } else if (d.status === 'error') {
+          clearInterval(pollTimer);
+          document.getElementById('run-btn').disabled = false;
+          setStatus('error', 'Error: ' + (d.error || '').split('\n').pop());
+        }
+      });
+  }, 2000);
+}
+
+function setStatus(type, msg) {
+  const el = document.getElementById('status-bar');
+  el.className = 'status-bar ' + (type === 'done' ? 'done' : type === 'error' ? 'error' : 'running');
+  const spinner = (type !== 'done' && type !== 'error') ? '<span class="spinner"></span>' : '';
+  el.innerHTML = spinner + msg;
+}
+
+function showResult(result) {
+  const sec = document.getElementById('result-section');
+  sec.style.display = 'block';
+
+  const audioUrl   = `/jobs/${jobId}/binaural.wav`;
+  const previewUrl = `/jobs/${jobId}/` + (result.preview ? result.preview.split('/').pop() : 'preview.mp4');
+  const overlayUrl = result.overlay ? `/jobs/${jobId}/overlay.mp4` : null;
+
+  document.getElementById('result-video').src = previewUrl;
+
+  if (overlayUrl) {
+    document.getElementById('result-overlay').src = overlayUrl;
+    document.getElementById('dl-overlay').href = overlayUrl;
+    document.getElementById('dl-overlay').download = 'overlay.mp4';
+    document.getElementById('dl-overlay').style.display = '';
+  } else {
+    document.getElementById('result-overlay').src = previewUrl;
+    document.getElementById('dl-overlay').style.display = 'none';
+  }
+
+  document.getElementById('dl-audio').href = audioUrl;
+  document.getElementById('dl-audio').download = 'binaural.wav';
+
+  if (result.foa) {
+    const foaUrl = `/jobs/${jobId}/foa.wav`;
+    document.getElementById('dl-foa').href = foaUrl;
+    document.getElementById('dl-foa').download = 'foa.wav';
+    document.getElementById('dl-foa').style.display = '';
+  } else {
+    document.getElementById('dl-foa').style.display = 'none';
+  }
+
+  sec.scrollIntoView({ behavior: 'smooth' });
+}
+
+function resetAll() {
+  jobId = null; bbox = null; uploadedAudioPath = null; bboxListenersAttached = false;
+  if (pollTimer) clearInterval(pollTimer);
+  document.getElementById('upload-progress').style.display = 'none';
+  document.getElementById('progress-fill').style.width = '0%';
+  document.getElementById('progress-text').style.color = '#fbbf24';
+  document.getElementById('drop-zone').style.pointerEvents = '';
+  document.getElementById('drop-text').textContent = 'Click or drag a video file here (mp4, mov, avi...)';
+  document.getElementById('step-bbox').style.display = 'none';
+  document.getElementById('step-audio').style.display = 'none';
+  document.getElementById('step-run').style.display = 'none';
+  document.getElementById('result-section').style.display = 'none';
+  document.getElementById('status-bar').textContent = 'Waiting';
+  document.getElementById('status-bar').className = 'status-bar';
+  document.getElementById('run-btn').disabled = false;
+  document.getElementById('audio-file-name').textContent = 'No file selected';
+  document.getElementById('audio-file-name').className = 'file-name';
+  videoInput.value = '';
+  document.getElementById('audio-input').value = '';
+}
+</script>
+</body>
+</html>

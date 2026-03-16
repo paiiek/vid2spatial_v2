@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+*.so
+
+# Data & large files
+data/
+*.wav
+*.mp4
+*.mp3
+*.pt
+*.pth
+*.npz
+*.sofa
+*.pkl
+
+# Paper (confidential until published)
+vgtc_conference_latex-2024.02.14/
+vgtc_conference_latex-2024.02.14.zip
+docs/submission/
+docs/archive/old_drafts/
+
+# Listening test stimuli (participant data)
+test/listening_test_v3/stimuli/
+test/e2e_final/*/binaural.wav
+test/e2e_final/*/*.mp4
+
+# Demo video output (large)
+demo_video/capture/
+demo_video/v3_*.mp4
+demo_video/v2_*.mp4
+demo_video/vid2spatial_demo_v2.mp4
+demo_video/vid2spatial_demo_v3.mp4
+demo_video/*.list.txt
+
+# Weights
+weights/
+
+# Misc
+.DS_Store
+wandb/
+*.log

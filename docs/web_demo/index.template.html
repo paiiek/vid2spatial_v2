@@ -1,0 +1,675 @@
+<title>Vid2Spatial Playground</title>
+<meta name="description" content="Try Vid2Spatial in the browser: one drawn box on a video becomes a per-frame azimuth / elevation / distance stream, rendered binaurally live with Web Audio HRTF. Sketch a 3D trajectory by hand. See the OSC stream. Run the code.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --bg:#F5F3EF; --surface:#FFFFFF; --surface-2:#ECE9E2; --line:#D9D4CA;
+  --ink:#16142B; --muted:#5F5C70; --faint:#8E8B9C;
+  --accent:#C93A57; --accent-ink:#FFFFFF; --amber:#B7791F; --amber-soft:#F2B84B;
+  --cyan:#0F8B8D; --good:#2E7D4F;
+  --hud:#0A0918; --hud-ink:#F1F2F5;
+  --radius:6px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#07061A; --surface:#100F2A; --surface-2:#191838; --line:#2A2950;
+    --ink:#F1F2F5; --muted:#A6A4B8; --faint:#6E6C84;
+    --accent:#E94F6B; --accent-ink:#FFFFFF; --amber:#F2B84B; --amber-soft:#F2B84B;
+    --cyan:#5FD3D5; --good:#6FCF97;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#07061A; --surface:#100F2A; --surface-2:#191838; --line:#2A2950;
+  --ink:#F1F2F5; --muted:#A6A4B8; --faint:#6E6C84;
+  --accent:#E94F6B; --accent-ink:#FFFFFF; --amber:#F2B84B; --amber-soft:#F2B84B;
+  --cyan:#5FD3D5; --good:#6FCF97;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:16px;line-height:1.55;-webkit-font-smoothing:antialiased}
+h1,h2,h3{font-family:"Familjen Grotesk","IBM Plex Sans",system-ui,sans-serif;text-wrap:balance;margin:0;line-height:1.1}
+h1{font-size:clamp(40px,7vw,84px);font-weight:700;letter-spacing:-0.02em}
+h2{font-size:clamp(26px,3.4vw,38px);font-weight:600;letter-spacing:-0.01em}
+h3{font-size:19px;font-weight:600}
+p{margin:0}
+a{color:var(--accent);text-decoration-thickness:1px;text-underline-offset:3px}
+code,pre,.mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--hud);color:var(--hud-ink);padding:16px 18px;border-radius:var(--radius);overflow-x:auto;font-size:13.5px;line-height:1.5;margin:0}
+code{font-size:0.92em;background:var(--surface-2);padding:1px 5px;border-radius:4px}
+pre code{background:none;padding:0;font-size:inherit}
+.wrap{max-width:1180px;margin:0 auto;padding:0 24px}
+.eyebrow{font-family:"IBM Plex Mono",monospace;font-size:12px;letter-spacing:0.14em;text-transform:uppercase;color:var(--muted)}
+.lede{font-size:19px;color:var(--muted);max-width:62ch}
+section{padding:64px 0;border-top:1px solid var(--line)}
+section:first-of-type{border-top:0}
+.sec-head{display:flex;flex-direction:column;gap:10px;margin-bottom:28px;max-width:70ch}
+.btn{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;font-weight:500;padding:9px 14px;border-radius:var(--radius);cursor:pointer;display:inline-flex;align-items:center;gap:8px;line-height:1}
+.btn:hover{border-color:var(--ink)}
+.btn:focus-visible,.seg button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.btn.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.btn.primary:hover{filter:brightness(1.08)}
+.btn[disabled]{opacity:.5;cursor:default}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;background:var(--surface)}
+.seg button{appearance:none;border:0;background:transparent;color:var(--muted);font:inherit;font-size:14px;font-weight:500;padding:8px 12px;cursor:pointer;line-height:1}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--bg)}
+label.field{display:inline-flex;flex-direction:column;gap:5px;font-size:13px;color:var(--muted)}
+select,input[type="range"]{font:inherit}
+select{padding:8px 10px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);color:var(--ink)}
+.toolbar{display:flex;flex-wrap:wrap;gap:12px 18px;align-items:flex-end;margin-bottom:14px}
+.note{font-size:13.5px;color:var(--muted)}
+.note strong{color:var(--ink);font-weight:600}
+
+/* header */
+header.top{padding:26px 0 8px}
+header.top .wrap{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:12px;font-family:"Familjen Grotesk",sans-serif;font-weight:700;font-size:20px}
+.brand .dot{width:12px;height:12px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px color-mix(in srgb,var(--accent) 22%,transparent)}
+nav.top a{color:var(--muted);text-decoration:none;font-size:14px;margin-left:18px}
+nav.top a:hover{color:var(--ink)}
+
+/* hero */
+.hero{padding:40px 0 48px}
+.hero-grid{display:grid;grid-template-columns:1.05fr 1fr;gap:40px;align-items:center}
+.hero .stack{display:flex;flex-direction:column;gap:20px}
+.hero .cta{display:flex;gap:10px;flex-wrap:wrap}
+.pipe{display:grid;grid-template-columns:1fr auto 1fr auto 1fr;gap:10px;align-items:center;font-size:14px}
+.pipe .box{border:1px solid var(--line);background:var(--surface);border-radius:var(--radius);padding:12px 14px;display:flex;flex-direction:column;gap:2px}
+.pipe .box b{font-weight:600}
+.pipe .box span{color:var(--muted);font-size:13px}
+.pipe .arr{color:var(--faint);font-size:20px}
+.pipe .out{display:flex;flex-direction:column;gap:6px}
+.pipe .out .box{padding:8px 12px}
+.meta{display:flex;flex-wrap:wrap;gap:8px 20px;font-size:14px;color:var(--muted)}
+@media (max-width:860px){.hero-grid{grid-template-columns:1fr}.pipe{grid-template-columns:1fr;gap:6px}.pipe .arr{transform:rotate(90deg);justify-self:center}}
+
+/* video demo */
+.demo{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);gap:18px}
+@media (max-width:900px){.demo{grid-template-columns:1fr}}
+.stage{position:relative;background:var(--hud);border-radius:var(--radius);overflow:hidden;aspect-ratio:16/9;user-select:none}
+.stage video{position:absolute;inset:0;width:100%;height:100%;display:block}
+.stage canvas.ov{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.stage .hud{position:absolute;left:12px;top:10px;font-family:"IBM Plex Mono",monospace;font-size:13px;line-height:1.45;color:var(--hud-ink);background:rgba(10,9,24,.62);padding:8px 10px;border-radius:4px;pointer-events:none;font-variant-numeric:tabular-nums}
+.stage .hud b{color:var(--amber-soft);font-weight:500}
+.stage .clipname{position:absolute;left:12px;bottom:10px;font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--amber-soft);background:rgba(10,9,24,.62);padding:5px 8px;border-radius:4px;pointer-events:none}
+.stage .frame{position:absolute;right:12px;bottom:10px;font-family:"IBM Plex Mono",monospace;font-size:12px;color:var(--hud-ink);background:rgba(10,9,24,.62);padding:5px 8px;border-radius:4px;pointer-events:none;font-variant-numeric:tabular-nums}
+.stage .bigplay{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(7,6,26,.35);cursor:pointer;border:0;color:#fff;font:inherit}
+.stage .bigplay span{display:inline-flex;align-items:center;gap:10px;background:var(--accent);padding:12px 18px;border-radius:999px;font-weight:600;font-size:16px}
+.stage .bigplay[hidden]{display:none}
+.side{display:flex;flex-direction:column;gap:14px}
+.panel{border:1px solid var(--line);background:var(--surface);border-radius:var(--radius);padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.panel h3{font-size:14px;letter-spacing:.02em;color:var(--muted);font-family:"IBM Plex Sans",sans-serif;font-weight:600;text-transform:uppercase}
+.radar{width:100%;aspect-ratio:1;display:block}
+.plot{width:100%;height:112px;display:block}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:14px;font-variant-numeric:tabular-nums}
+.kv dt{color:var(--muted)}.kv dd{margin:0}
+.controls{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.file{display:inline-flex;align-items:center;gap:8px;font-size:14px}
+.file input{display:none}
+.vol{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+
+/* sketch */
+.sketch{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,1fr);gap:18px}
+@media (max-width:900px){.sketch{grid-template-columns:1fr}}
+.sk-stage{position:relative;background:var(--hud);border-radius:var(--radius);overflow:hidden;aspect-ratio:4/3;touch-action:none}
+.sk-stage canvas{display:block;width:100%;height:100%}
+.sk-stage .hud{position:absolute;left:12px;top:10px;font-family:"IBM Plex Mono",monospace;font-size:13px;color:var(--hud-ink);background:rgba(10,9,24,.62);padding:8px 10px;border-radius:4px;pointer-events:none;font-variant-numeric:tabular-nums;line-height:1.45}
+.sk-stage .hint{position:absolute;left:12px;bottom:10px;right:12px;font-size:13px;color:var(--hud-ink);opacity:.85;pointer-events:none}
+.sk-stage .hud b{color:var(--accent);font-weight:500}
+textarea.export{width:100%;min-height:96px;font-family:"IBM Plex Mono",monospace;font-size:12px;background:var(--surface-2);color:var(--ink);border:1px solid var(--line);border-radius:var(--radius);padding:8px;resize:vertical}
+
+/* osc */
+.osc{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px}
+@media (max-width:900px){.osc{grid-template-columns:1fr}}
+.term{background:var(--hud);color:#B9F5C1;border-radius:var(--radius);padding:14px 16px;font-family:"IBM Plex Mono",monospace;font-size:12.5px;line-height:1.5;height:300px;overflow:hidden;position:relative}
+.term .l{white-space:pre;color:#8FE3A0}
+.term .l.dim{color:#5E7A66}
+.term .addr{color:#F2B84B}
+.term .t{color:#8A87A0}
+.term:after{content:"";position:absolute;left:0;right:0;top:0;height:40px;background:linear-gradient(var(--hud),transparent);pointer-events:none}
+
+/* results */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+@media (max-width:900px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{border:1px solid var(--line);background:var(--surface);border-radius:var(--radius);padding:16px}
+.stat .n{font-family:"Familjen Grotesk",sans-serif;font-size:36px;font-weight:700;letter-spacing:-0.02em;line-height:1;font-variant-numeric:tabular-nums}
+.stat .n small{font-size:18px;font-weight:600;color:var(--muted)}
+.stat .l{font-size:13.5px;color:var(--muted);margin-top:8px}
+table{border-collapse:collapse;width:100%;font-size:14.5px;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--line)}
+th{font-weight:600;color:var(--muted);font-size:13px;letter-spacing:.02em}
+td.num,th.num{text-align:right}
+tr.hl td{font-weight:600}
+.tables{display:grid;grid-template-columns:1fr 1fr;gap:24px;margin-top:22px}
+@media (max-width:900px){.tables{grid-template-columns:1fr}}
+.tables .cap{font-size:13px;color:var(--muted);margin-top:8px}
+
+/* run */
+.run{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media (max-width:900px){.run{grid-template-columns:1fr}}
+.run .panel{gap:12px}
+.run h3{font-family:"Familjen Grotesk",sans-serif;text-transform:none;letter-spacing:0;font-size:19px;color:var(--ink)}
+.arch{width:100%;height:auto;border-radius:var(--radius);border:1px solid var(--line);background:#fff}
+
+footer{padding:40px 0 60px;border-top:1px solid var(--line);color:var(--muted);font-size:14px}
+footer .wrap{display:flex;flex-direction:column;gap:8px}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+
+<header class="top">
+  <div class="wrap">
+    <div class="brand"><span class="dot"></span>Vid2Spatial</div>
+    <nav class="top">
+      <a href="#video">Video</a><a href="#sketch">Sketch</a><a href="#osc">OSC</a><a href="#results">Results</a><a href="#run">Run it</a><a href="#paper">Paper</a>
+    </nav>
+  </div>
+</header>
+
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="stack">
+      <p class="eyebrow">IEEE ISMAR 2026 · Poster</p>
+      <h1>Draw one box. Hear it move.</h1>
+      <p class="lede">Vid2Spatial turns spatial audio authoring into <strong>parameter extraction</strong>: a single bounding box on a video, or a freehand stroke on a 3D sphere, becomes a per-frame stream of azimuth, elevation and relative distance. That stream is an editable artifact, replayed by binaural, Ambisonics and OSC consumers. Everything below runs in your browser.</p>
+      <div class="cta">
+        <a class="btn primary" href="#video">Try the video demo</a>
+        <a class="btn" href="#sketch">Sketch a trajectory</a>
+        <a class="btn" href="https://github.com/paiiek/vid2spatial_v2" target="_blank" rel="noopener">Code on GitHub</a>
+      </div>
+      <p class="meta"><span>Seungryeol Paik</span><span>Kyungsu Kim</span><span>Kyogu Lee</span><span>Seoul National University</span></p>
+      <p class="note">Headphones required for the binaural rendering. Speakers will not give you the effect.</p>
+    </div>
+    <div class="pipe" aria-label="Pipeline">
+      <div class="box"><b>Video</b><span>one first-frame box → SAM2 + YOLO-World</span><b style="margin-top:8px">Sketch</b><span>freehand stroke on a WebGL sphere</span></div>
+      <div class="arr">→</div>
+      <div class="box"><b>Parameter stream</b><span class="mono">az, el, d_rel</span><span>per frame · JSON · editable</span></div>
+      <div class="arr">→</div>
+      <div class="out">
+        <div class="box"><b>Binaural</b><span>KEMAR HRTF</span></div>
+        <div class="box"><b>FOA AmbiX</b><span>ACN / SN3D</span></div>
+        <div class="box"><b>OSC</b><span>any DAW or engine</span></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="video">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">01 · Video mode</p>
+      <h2>An extracted trajectory, rendered live</h2>
+      <p class="lede">Four LaSOT clips with their real Vid2Spatial output. The box you see is the tracker's estimate, not ground truth. Audio is spatialized in real time from the parameter stream with the browser's HRTF panner. Switch to the offline KEMAR render, or drop in your own sound.</p>
+    </div>
+    <div class="toolbar">
+      <label class="field">Clip
+        <select id="clipSel"></select>
+      </label>
+      <label class="field">Audio path
+        <div class="seg" id="audioMode" role="group" aria-label="Audio path">
+          <button aria-pressed="true" data-mode="live">Live HRTF (Web Audio)</button>
+          <button aria-pressed="false" data-mode="kemar">Offline KEMAR render</button>
+          <button aria-pressed="false" data-mode="mono">Mono (no spatialization)</button>
+        </div>
+      </label>
+      <label class="file btn">
+        <input type="file" id="userAudio" accept="audio/*">
+        <span>Use my own sound</span>
+      </label>
+      <span class="note" id="userAudioName"></span>
+    </div>
+    <div class="demo">
+      <div class="stage" id="stage">
+        <video id="vid" playsinline muted loop preload="auto"></video>
+        <canvas class="ov" id="ov"></canvas>
+        <div class="hud" id="hud">Az <b>+0.0°</b>  El <b>+0.0°</b><br>d_rel <b>0.00</b>  dist <b>0.0 m</b><br>conf <b>0.00</b></div>
+        <div class="clipname" id="clipName"></div>
+        <div class="frame" id="frameNo">0 / 300</div>
+        <button class="bigplay" id="bigplay"><span>▶ Play with sound</span></button>
+      </div>
+      <div class="side">
+        <div class="panel">
+          <h3>Listener view (top-down)</h3>
+          <canvas class="radar" id="radar" width="300" height="300" aria-label="Top-down listener view"></canvas>
+          <p class="note">You are at the centre facing up. Ring spacing 2 m. Distance uses the clip's relative depth (<code>d_rel</code> = (dist − 1 m) / 7 m).</p>
+        </div>
+        <div class="panel">
+          <h3>Azimuth over the clip</h3>
+          <canvas class="plot" id="plot" width="600" height="112" aria-label="Azimuth over time"></canvas>
+          <dl class="kv"><dt>Clip AzMAE vs GT</dt><dd id="clipMae">—</dd><dt>Init</dt><dd>one box on frame 0</dd><dt>Tracker</dt><dd>yw_sam2 + Kalman smoothing</dd></dl>
+        </div>
+        <div class="panel">
+          <div class="controls">
+            <button class="btn" id="playBtn">▶ Play</button>
+            <div class="vol"><span>Vol</span><input type="range" id="vol" min="0" max="1" step="0.01" value="0.8"></div>
+          </div>
+          <p class="note" id="audioStatus">Click play to start the audio engine.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="sketch">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">02 · Sketch mode</p>
+      <h2>Sources the camera never saw</h2>
+      <p class="lede">Off-screen and non-literal sources are drawn by hand. Drag on the sphere to author a stroke; scroll or pinch to change distance. The stroke keeps its own timing, so playback follows the speed of your hand. This is the same raycaster convention the desktop tool uses: azimuth 0° is straight ahead, positive to the right.</p>
+    </div>
+    <div class="sketch">
+      <div class="sk-stage" id="skStage">
+        <canvas id="skCanvas"></canvas>
+        <div class="hud" id="skHud">Az <b>+0.0°</b>  El <b>+0.0°</b><br>dist <b>2.0 m</b>  points <b>0</b></div>
+        <div class="hint" id="skHint">Drag to draw · scroll to set distance · release and press play</div>
+      </div>
+      <div class="side">
+        <div class="panel">
+          <div class="controls">
+            <button class="btn primary" id="skPlay">▶ Play stroke</button>
+            <button class="btn" id="skClear">Clear</button>
+            <label class="field">Sound
+              <select id="skSound">
+                <option value="ping">Synth ping (loop)</option>
+                <option value="noise">Filtered noise</option>
+                <option value="clip">Current clip's audio</option>
+              </select>
+            </label>
+          </div>
+          <label class="field">Distance <span id="skDistLbl">2.0 m</span>
+            <input type="range" id="skDist" min="1" max="8" step="0.1" value="2">
+          </label>
+          <p class="note" id="skStatus">Draw a stroke to begin.</p>
+        </div>
+        <div class="panel">
+          <h3>Exported parameter stream</h3>
+          <textarea class="export" id="skExport" readonly spellcheck="false" placeholder='{"fps":..., "frames":[{"az":..,"el":..,"d_rel":..}]}'></textarea>
+          <div class="controls">
+            <button class="btn" id="skCopy">Copy JSON</button>
+            <button class="btn" id="skSave" hidden>Save JSON</button>
+          </div>
+          <p class="note">Same schema the desktop tool writes. Feed it to the binaural, FOA or OSC renderer without re-drawing.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="osc">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">03 · OSC · runtime</p>
+      <h2>The same stream, into any engine</h2>
+      <p class="lede">Nothing is re-extracted for a new consumer. The stream is sent over UDP as plain OSC messages; verified receivers include Reaper, Max/MSP, TouchDesigner, Unreal Engine and Pure Data. The terminal mirrors whatever is playing above.</p>
+    </div>
+    <div class="osc">
+      <div class="term" id="term" aria-live="off"></div>
+      <div class="side">
+        <div class="panel">
+          <h3>Message layout</h3>
+<pre><code>/vid2spatial/azimuth     f  az_deg      # +right
+/vid2spatial/elevation   f  el_deg      # +up
+/vid2spatial/distance    f  d_rel       # 0..1
+/vid2spatial/distance_m  f  dist_m
+/vid2spatial/velocity    f  deg_per_s
+/vid2spatial/timecode    f  seconds
+/vid2spatial/frame       i  index
+/vid2spatial/spatial     ffff az el d_rel conf   # atomic bundle</code></pre>
+        </div>
+        <div class="panel">
+          <h3>Measured authoring-to-runtime path</h3>
+          <dl class="kv">
+            <dt>Motion-to-parameter latency</dt><dd>1.35 ms median · 9.09 ms p99</dd>
+            <dt>Bundles</dt><dd>5400 / 5400 delivered, in order</dd>
+            <dt>Re-anchoring error</dt><dd>≤ 5.7 × 10⁻⁶ °</dd>
+          </dl>
+          <p class="note">Simulated 90 Hz head-worn runtime over OSC. Excludes display, wireless transport and the HRTF block.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="results">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">04 · Evidence</p>
+      <h2>What the numbers say</h2>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="n">1.36<small>°</small></div><div class="l">Mean azimuth error on 22 LaSOT clips (median 0.70°), from one first-frame box</div></div>
+      <div class="stat"><div class="n">41–49<small>%</small></div><div class="l">Faster authoring than framewise manual entry, N = 12 (p &lt; 0.001)</div></div>
+      <div class="stat"><div class="n">87–90<small>%</small></div><div class="l">Fewer edit operations for the same task</div></div>
+      <div class="stat"><div class="n">1.35<small> ms</small></div><div class="l">Median motion-to-parameter latency to a simulated head-worn runtime</div></div>
+    </div>
+    <div class="tables">
+      <div>
+        <table>
+          <thead><tr><th>Tracker (22 clips)</th><th class="num">AzMAE °</th><th class="num">Median °</th></tr></thead>
+          <tbody>
+            <tr class="hl"><td>yw_sam2 (proposed)</td><td class="num">1.36 ± 1.75</td><td class="num">0.70</td></tr>
+            <tr><td>ByteTrack</td><td class="num">4.22 ± 5.31</td><td class="num">2.10</td></tr>
+            <tr><td>KLT (classic flow)</td><td class="num">6.40</td><td class="num">4.77</td></tr>
+            <tr><td>Adaptive-K</td><td class="num">6.89 ± 8.14</td><td class="num">3.45</td></tr>
+            <tr><td>RAFT (deep flow)</td><td class="num">9.20</td><td class="num">7.41</td></tr>
+          </tbody>
+        </table>
+        <p class="cap">Off-distribution: 24 non-COCO LaSOT categories, mean AzMAE 1.70°, 19 of 24 within 2°.</p>
+      </div>
+      <div>
+        <table>
+          <thead><tr><th>Authoring study, N = 12</th><th class="num">Manual</th><th class="num">Vid2Spatial</th><th class="num">Δ</th></tr></thead>
+          <tbody>
+            <tr><td>Time T1 / T2 (s)</td><td class="num">153 / 116</td><td class="num">90 / 59</td><td class="num">−41 / −49 %</td></tr>
+            <tr><td>Edit ops T1 / T2</td><td class="num">110 / 83</td><td class="num">14 / 8</td><td class="num">−87 / −90 %</td></tr>
+            <tr><td>Satisfaction</td><td class="num" colspan="3">non-inferior at ±0.5 Likert (p = 0.0006)</td></tr>
+          </tbody>
+        </table>
+        <p class="cap">Satisfaction is a one-sided non-inferiority result, not equivalence.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="run">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">05 · Run it yourself</p>
+      <h2>From a video file to a parameter stream</h2>
+      <p class="lede">The extraction step needs a GPU and SAM2. Rendering and OSC do not. The local web tool bundles video mode, sketch mode and OSC in one page served by Python.</p>
+    </div>
+    <img class="arch" src="{{ARCH_IMG}}" alt="Architecture: video or sketch input, SAM2 and YOLO-World tracking, per-frame azimuth/elevation/distance stream, binaural, FOA and OSC outputs">
+    <div class="run" style="margin-top:18px">
+      <div class="panel">
+        <h3>Install</h3>
+<pre><code>git clone https://github.com/paiiek/vid2spatial_v2
+cd vid2spatial_v2
+pip install torch torchvision torchaudio
+pip install opencv-python numpy scipy h5py
+pip install git+https://github.com/facebookresearch/segment-anything-2.git
+pip install ultralytics python-osc   # YOLO-World init, OSC
+
+# local web tool: video + sketch + OSC
+cd test/demo && python server.py --port 8090</code></pre>
+      </div>
+      <div class="panel">
+        <h3>Python API</h3>
+<pre><code>from vid2spatial_pkg.v2_spatial_tracker import V2SpatialTracker
+from vid2spatial_pkg.foa_render import direct_binaural_sofa
+from vid2spatial_pkg.osc_sender import OSCSpatialSender
+
+tracker = V2SpatialTracker(video_path="input.mp4",
+                           bbox_init=[x, y, w, h],   # drawn once
+                           tracker_type="yw_sam2")
+traj = tracker.run()                  # per-frame az, el, d_rel
+traj.save("traj.json")
+
+binaural = direct_binaural_sofa(audio_mono, sr=48000,
+                                az_rad=traj.az, el_rad=traj.el,
+                                sofa_path="kemar.sofa")
+
+OSCSpatialSender("127.0.0.1", 9000).stream_trajectory(traj.frames, fps=30)</code></pre>
+      </div>
+    </div>
+    <p class="note" style="margin-top:14px">Coordinate convention: pipeline azimuth is <code>atan2(x, z)</code>, right of image positive; the FOA encoder flips sign to the SOFA / AmbiX convention. KEMAR SOFA file is downloaded separately.</p>
+  </div>
+</section>
+
+<section id="paper">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">06 · Paper</p>
+      <h2>Vid2Spatial: Controllable Spatial Audio Authoring by Parameter Extraction from Video and Sketch</h2>
+      <p class="lede">Seungryeol Paik, Kyungsu Kim, Kyogu Lee · Seoul National University · IEEE ISMAR 2026, poster #5498.</p>
+    </div>
+    <pre><code>@inproceedings{paik2026vid2spatial,
+  title     = {Vid2Spatial: Controllable Spatial Audio Authoring by
+               Parameter Extraction from Video and Sketch},
+  author    = {Paik, Seungryeol and Kim, Kyungsu and Lee, Kyogu},
+  booktitle = {IEEE International Symposium on Mixed and Augmented Reality
+               Adjunct (ISMAR-Adjunct)},
+  year      = {2026}
+}</code></pre>
+    <p class="note" style="margin-top:14px">Contact: paik402@snu.ac.kr · Supported by the InnoCORE program of the Ministry of Science and ICT (AI Meta-Scientist, N10260110).</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>Demo clips are from the LaSOT benchmark (Fan et al., CVPR 2019, Creative Commons). Trajectories are unedited tracker output. The live path uses the Web Audio API's HRTF panner, which is not the KEMAR set used in the paper; pick the offline render to hear that.</p>
+    <p>Web Audio, WebGL and three.js run locally; nothing you draw or upload leaves your browser.</p>
+  </div>
+</footer>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+<script>
+const ASSETS = {{ASSETS}};
+</script>
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const clamp = (v,a,b) => Math.max(a, Math.min(b, v));
+const deg = r => r*180/Math.PI;
+const fmt = (v,d=1,sign=true) => (sign && v>=0 ? '+' : '') + v.toFixed(d);
+const CLIPS = ASSETS.clips;
+const ORDER = ['car-10','drone-13','skateboard-8','dog-1'];
+const LABEL = {'car-10':'car-10 · wide arc crossing (COCO class)','drone-13':'drone-13 · small, off-distribution (non-COCO)','skateboard-8':'skateboard-8 · fast, close','dog-1':'dog-1 · handheld, erratic'};
+const MAE = {'car-10':'0.62°','drone-13':'0.44°','skateboard-8':'0.18°','dog-1':'1.13°'};
+
+/* ---------- audio engine ---------- */
+let ctx=null, master=null, panner=null, dryGain=null;
+const decoded = {};   // key -> AudioBuffer
+function ensureCtx(){
+  if (ctx) return ctx;
+  ctx = new (window.AudioContext||window.webkitAudioContext)();
+  master = ctx.createGain(); master.gain.value = parseFloat($('#vol').value);
+  master.connect(ctx.destination);
+  panner = ctx.createPanner();
+  panner.panningModel='HRTF'; panner.distanceModel='inverse';
+  panner.refDistance=1; panner.rolloffFactor=0.6; panner.maxDistance=40;
+  panner.coneInnerAngle=360; panner.coneOuterAngle=360;
+  panner.connect(master);
+  dryGain = ctx.createGain(); dryGain.connect(master);
+  if (ctx.listener.forwardX){ ctx.listener.forwardX.value=0; ctx.listener.forwardY.value=0; ctx.listener.forwardZ.value=-1; ctx.listener.upX.value=0; ctx.listener.upY.value=1; ctx.listener.upZ.value=0; }
+  else ctx.listener.setOrientation(0,0,-1,0,1,0);
+  return ctx;
+}
+function b64ToBuf(b64){ const s=atob(b64); const u=new Uint8Array(s.length); for(let i=0;i<s.length;i++) u[i]=s.charCodeAt(i); return u.buffer; }
+async function getBuffer(key, b64){
+  if (decoded[key]) return decoded[key];
+  const buf = await ensureCtx().decodeAudioData(b64ToBuf(b64));
+  decoded[key]=buf; return buf;
+}
+function toMono(buf){
+  if (buf.numberOfChannels===1) return buf;
+  const out = ctx.createBuffer(1, buf.length, buf.sampleRate);
+  const o = out.getChannelData(0);
+  for (let c=0;c<buf.numberOfChannels;c++){ const d=buf.getChannelData(c); for(let i=0;i<d.length;i++) o[i]+=d[i]/buf.numberOfChannels; }
+  return out;
+}
+function setPanner(az, el, dist){
+  if (!panner) return;
+  const x = dist*Math.sin(az)*Math.cos(el), y = dist*Math.sin(el), z = -dist*Math.cos(az)*Math.cos(el);
+  const t = ctx.currentTime;
+  if (panner.positionX){ panner.positionX.linearRampToValueAtTime(x,t+0.03); panner.positionY.linearRampToValueAtTime(y,t+0.03); panner.positionZ.linearRampToValueAtTime(z,t+0.03); }
+  else panner.setPosition(x,y,z);
+}
+$('#vol').addEventListener('input', e => { if (master) master.gain.value = parseFloat(e.target.value); });
+
+/* ---------- OSC terminal ---------- */
+const term=$('#term'); const lines=[]; let lastOsc=0;
+function oscEmit(i,f,t,srcName){
+  const now=performance.now(); if(now-lastOsc<80) return; lastOsc=now;
+  const az=deg(f.az), el=deg(f.el);
+  const s=`<span class="t">[${t.toFixed(2).padStart(6)}s]</span> <span class="addr">/vid2spatial/spatial</span> ${fmt(az,2)} ${fmt(el,2)} ${f.d.toFixed(3)} ${(f.conf??1).toFixed(2)}`;
+  lines.push(s); if(lines.length>18) lines.shift();
+  term.innerHTML=lines.map((l,k)=>`<div class="l${k<lines.length-6?' dim':''}">${l}</div>`).join('');
+}
+lines.push('<span class="t">udp://127.0.0.1:9000</span>  waiting for playback…'); term.innerHTML=`<div class="l dim">${lines[0]}</div>`;
+
+/* ---------- video mode ---------- */
+const vid=$('#vid'), ov=$('#ov'), hud=$('#hud'), radar=$('#radar'), plot=$('#plot');
+let clip=null, traj=null, mode='live', userBuf=null, src=null, playing=false, lastFrame=-1;
+const sel=$('#clipSel');
+ORDER.forEach(k=>{ const o=document.createElement('option'); o.value=k; o.textContent=LABEL[k]; sel.appendChild(o); });
+function loadClip(k){
+  stopSrc(); playing=false; $('#playBtn').textContent='▶ Play'; $('#bigplay').hidden=false;
+  clip=k; traj=CLIPS[k].traj; lastFrame=-1;
+  vid.src='data:video/mp4;base64,'+CLIPS[k].video; vid.load();
+  $('#clipName').textContent=k+'  ·  LaSOT  ·  '+traj.frames.length+' frames @ '+traj.fps+' fps';
+  $('#clipMae').textContent=MAE[k]||'—';
+  drawPlot(); drawFrame(0);
+}
+sel.addEventListener('change', e => loadClip(e.target.value));
+document.querySelectorAll('#audioMode button').forEach(b => b.addEventListener('click', () => {
+  document.querySelectorAll('#audioMode button').forEach(x=>x.setAttribute('aria-pressed', x===b));
+  mode=b.dataset.mode; if (playing) restartSrc();
+}));
+$('#userAudio').addEventListener('change', async e => {
+  const f=e.target.files[0]; if(!f) return;
+  try { const ab=await f.arrayBuffer(); userBuf=toMono(await ensureCtx().decodeAudioData(ab)); $('#userAudioName').textContent=f.name+' (mixed to mono, loops)'; if(mode==='kemar'){ mode='live'; document.querySelectorAll('#audioMode button').forEach(x=>x.setAttribute('aria-pressed', x.dataset.mode==='live')); } if(playing) restartSrc(); }
+  catch(err){ $('#userAudioName').textContent='Could not decode that file.'; }
+});
+function stopSrc(){ if(src){ try{src.stop();}catch(e){} src.disconnect(); src=null; } }
+async function startSrc(){
+  stopSrc(); if(!ctx) ensureCtx();
+  const key = mode==='kemar' ? clip+'.kemar' : clip+'.mono';
+  let buf;
+  if (mode!=='kemar' && userBuf) buf=userBuf;
+  else buf = await getBuffer(key, mode==='kemar' ? CLIPS[clip].kemar : CLIPS[clip].mono);
+  if (mode!=='kemar') buf=toMono(buf);
+  src=ctx.createBufferSource(); src.buffer=buf; src.loop=true;
+  src.connect(mode==='live' ? panner : dryGain);
+  const off = vid.currentTime % buf.duration;
+  src.start(0, off);
+  $('#audioStatus').textContent = mode==='live' ? 'Live: Web Audio HRTF panner driven by the parameter stream.' : mode==='kemar' ? 'Offline: binaural file rendered with the KEMAR SOFA set, as in the paper.' : 'Mono reference. No spatial cues.';
+}
+function restartSrc(){ startSrc(); }
+async function togglePlay(){
+  ensureCtx(); if (ctx.state==='suspended') await ctx.resume();
+  if (playing){ vid.pause(); stopSrc(); playing=false; $('#playBtn').textContent='▶ Play'; return; }
+  await startSrc(); await vid.play(); playing=true; $('#playBtn').textContent='❚❚ Pause'; $('#bigplay').hidden=true;
+}
+$('#playBtn').addEventListener('click', togglePlay);
+$('#bigplay').addEventListener('click', togglePlay);
+vid.addEventListener('seeked', () => { if (playing) restartSrc(); });
+
+function frameAt(t){ return clamp(Math.floor(t*traj.fps), 0, traj.frames.length-1); }
+function fr(i){ const f=traj.frames[i]; return {az:f[0],el:f[1],d:f[2],cx:f[3],cy:f[4],w:f[5],h:f[6],conf:f[7],dist:1+f[2]*7}; }
+function drawFrame(i){
+  const f=fr(i);
+  // overlay
+  const W=ov.width=ov.clientWidth*devicePixelRatio, H=ov.height=ov.clientHeight*devicePixelRatio;
+  const g=ov.getContext('2d'); g.clearRect(0,0,W,H);
+  const sx=W/traj.w, sy=H/traj.h;
+  g.lineWidth=2*devicePixelRatio; g.strokeStyle='#F2B84B';
+  g.strokeRect((f.cx-f.w/2)*sx,(f.cy-f.h/2)*sy,f.w*sx,f.h*sy);
+  g.fillStyle='#F2B84B'; g.beginPath(); g.arc(f.cx*sx,f.cy*sy,3.5*devicePixelRatio,0,7); g.fill();
+  // trail
+  g.strokeStyle='rgba(242,184,75,.55)'; g.lineWidth=1.5*devicePixelRatio; g.beginPath();
+  for(let k=Math.max(0,i-40);k<=i;k++){ const p=fr(k); if(k===Math.max(0,i-40)) g.moveTo(p.cx*sx,p.cy*sy); else g.lineTo(p.cx*sx,p.cy*sy); }
+  g.stroke();
+  hud.innerHTML=`Az <b>${fmt(deg(f.az))}°</b>  El <b>${fmt(deg(f.el))}°</b><br>d_rel <b>${f.d.toFixed(2)}</b>  dist <b>${f.dist.toFixed(1)} m</b><br>conf <b>${f.conf.toFixed(2)}</b>`;
+  $('#frameNo').textContent=`${i} / ${traj.frames.length}`;
+  drawRadar(f.az,f.el,f.dist); drawPlot(i);
+  setPanner(f.az,f.el,f.dist);
+  oscEmit(i, f, vid.currentTime);
+}
+function drawRadar(az,el,dist,color){
+  const c=radar, g=c.getContext('2d'), S=c.width, m=S/2, R=S/2-14;
+  const cs=getComputedStyle(document.documentElement);
+  g.clearRect(0,0,S,S);
+  g.strokeStyle=cs.getPropertyValue('--line'); g.lineWidth=1;
+  for(let r=2;r<=8;r+=2){ g.beginPath(); g.arc(m,m,R*r/8,0,7); g.stroke(); }
+  g.beginPath(); g.moveTo(m,m-R); g.lineTo(m,m+R); g.moveTo(m-R,m); g.lineTo(m+R,m); g.stroke();
+  g.fillStyle=cs.getPropertyValue('--muted'); g.font='11px IBM Plex Mono, monospace'; g.textAlign='center';
+  g.fillText('front',m,m-R-3); g.fillText('R',m+R+8,m+4); g.fillText('L',m-R-8,m+4);
+  // listener
+  g.fillStyle=cs.getPropertyValue('--ink'); g.beginPath(); g.moveTo(m,m-9); g.lineTo(m+7,m+7); g.lineTo(m-7,m+7); g.closePath(); g.fill();
+  const rr=clamp(dist/8,0,1)*R; const x=m+rr*Math.sin(az), y=m-rr*Math.cos(az);
+  g.strokeStyle=color||'#F2B84B'; g.lineWidth=1; g.setLineDash([3,4]); g.beginPath(); g.moveTo(m,m); g.lineTo(x,y); g.stroke(); g.setLineDash([]);
+  g.fillStyle=color||'#F2B84B'; g.beginPath(); g.arc(x,y,6+4*Math.sin(el),0,7); g.fill();
+}
+function drawPlot(i=-1){
+  const c=plot, g=c.getContext('2d'), W=c.width, H=c.height, n=traj.frames.length;
+  const cs=getComputedStyle(document.documentElement);
+  g.clearRect(0,0,W,H);
+  g.strokeStyle=cs.getPropertyValue('--line'); g.beginPath(); g.moveTo(0,H/2); g.lineTo(W,H/2); g.stroke();
+  g.fillStyle=cs.getPropertyValue('--muted'); g.font='11px IBM Plex Mono, monospace'; g.textAlign='left';
+  g.fillText('+60°',4,12); g.fillText('−60°',4,H-4); g.fillText('az',W-18,12);
+  g.strokeStyle='#F2B84B'; g.lineWidth=1.5; g.beginPath();
+  for(let k=0;k<n;k++){ const a=clamp(deg(traj.frames[k][0]),-60,60); const x=k/(n-1)*W, y=H/2-a/60*(H/2-8); k?g.lineTo(x,y):g.moveTo(x,y); }
+  g.stroke();
+  if(i>=0){ const x=i/(n-1)*W; g.strokeStyle=cs.getPropertyValue('--accent'); g.beginPath(); g.moveTo(x,0); g.lineTo(x,H); g.stroke(); }
+}
+let prevT=0;
+function tick(){
+  if (traj){ if (playing && vid.currentTime < prevT-1) restartSrc(); prevT=vid.currentTime; const i=frameAt(vid.currentTime); if(i!==lastFrame){ lastFrame=i; drawFrame(i); } }
+  requestAnimationFrame(tick);
+}
+new ResizeObserver(()=>{ if(traj) drawFrame(lastFrame<0?0:lastFrame); }).observe($('#stage'));
+loadClip(ORDER[0]); requestAnimationFrame(tick);
+
+/* ---------- sketch mode ---------- */
+const skStage=$('#skStage'), skCanvas=$('#skCanvas'), skHud=$('#skHud');
+let R,S,C, sphere, cursor, strokeLine, strokeGeo, playhead, stroke=[], drawing=false, skDist=2.0, skPlaying=false, skRaf=null, skSrc=null;
+function skInit(){
+  if (!window.THREE){ $('#skStatus').textContent='three.js did not load; sketch mode unavailable.'; return; }
+  R=new THREE.WebGLRenderer({canvas:skCanvas,antialias:true,alpha:true}); R.setPixelRatio(Math.min(2,devicePixelRatio)); R.setClearColor(0x0a0918,1);
+  S=new THREE.Scene(); C=new THREE.PerspectiveCamera(50,1,0.01,100); C.position.set(0,0.35,3.9); C.lookAt(0,0,0);
+  const resize=()=>{ const w=skStage.clientWidth,h=skStage.clientHeight; R.setSize(w,h,false); C.aspect=w/h; C.updateProjectionMatrix(); }; resize(); new ResizeObserver(resize).observe(skStage);
+  sphere=new THREE.Mesh(new THREE.SphereGeometry(1.5,36,24), new THREE.MeshBasicMaterial({color:0x2a2960,wireframe:true,transparent:true,opacity:.45})); S.add(sphere);
+  const ring=new THREE.Mesh(new THREE.RingGeometry(1.49,1.515,96), new THREE.MeshBasicMaterial({color:0x4a4890,side:THREE.DoubleSide})); ring.rotation.x=Math.PI/2; S.add(ring);
+  const axis=(a,b,c)=>{ S.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(...a),new THREE.Vector3(...b)]), new THREE.LineBasicMaterial({color:c}))); };
+  axis([0,0,0],[0,0,1.75],0x5fd3d5); axis([0,0,0],[1.75,0,0],0x6e6c84); axis([0,0,0],[0,1.75,0],0x6e6c84);
+  const head=new THREE.Mesh(new THREE.SphereGeometry(0.09,12,12), new THREE.MeshBasicMaterial({color:0xf1f2f5})); S.add(head);
+  const nose=new THREE.Mesh(new THREE.ConeGeometry(0.04,0.12,8), new THREE.MeshBasicMaterial({color:0xf1f2f5})); nose.rotation.x=Math.PI/2; nose.position.set(0,0,0.13); S.add(nose);
+  cursor=new THREE.Mesh(new THREE.SphereGeometry(0.05,10,10), new THREE.MeshBasicMaterial({color:0xe94f6b})); cursor.visible=false; S.add(cursor);
+  playhead=new THREE.Mesh(new THREE.SphereGeometry(0.07,12,12), new THREE.MeshBasicMaterial({color:0xf2b84b})); playhead.visible=false; S.add(playhead);
+  (function loop(){ requestAnimationFrame(loop); if(!R) return; R.render(S,C); })();
+  const pos=e=>{ const r=skStage.getBoundingClientRect(); return new THREE.Vector2(((e.clientX-r.left)/r.width)*2-1, -((e.clientY-r.top)/r.height)*2+1); };
+  const cast=e=>{ const rc=new THREE.Raycaster(); rc.setFromCamera(pos(e),C); const h=rc.intersectObject(sphere); if(!h.length) return null; const p=h[0].point.clone().normalize(); return {az:Math.atan2(p.x,p.z), el:Math.asin(clamp(p.y,-1,1))}; };
+  const sp=(az,el,r)=>new THREE.Vector3(r*Math.sin(az)*Math.cos(el), r*Math.sin(el), r*Math.cos(az)*Math.cos(el));
+  const rebuild=()=>{ if(strokeLine){ S.remove(strokeLine); strokeLine.geometry.dispose(); strokeLine=null; } if(stroke.length<2) return; const pts=stroke.map(p=>sp(p.az,p.el,1.52+(p.dist-1)*0.03)); strokeLine=new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({color:0xe94f6b})); S.add(strokeLine); };
+  const hudSet=(az,el,d)=>{ skHud.innerHTML=`Az <b>${fmt(deg(az))}°</b>  El <b>${fmt(deg(el))}°</b><br>dist <b>${d.toFixed(1)} m</b>  points <b>${stroke.length}</b>`; };
+  const onDown=e=>{ skCanvas.setPointerCapture(e.pointerId); const h=cast(e); if(!h) return; if(skPlaying) skStop(); stroke=[]; drawing=true; stroke.push({az:h.az,el:h.el,dist:skDist,t:performance.now()}); rebuild(); hudSet(h.az,h.el,skDist); };
+  const onMove=e=>{ const h=cast(e); if(!h){ cursor.visible=false; return; } cursor.visible=true; cursor.position.copy(sp(h.az,h.el,1.55)); if(drawing){ const last=stroke[stroke.length-1]; if(performance.now()-last.t>=16){ stroke.push({az:h.az,el:h.el,dist:skDist,t:performance.now()}); rebuild(); } } hudSet(h.az,h.el,skDist); };
+  const onUp=()=>{ if(drawing){ drawing=false; skExport(); $('#skStatus').textContent=`${stroke.length} points, ${((stroke[stroke.length-1].t-stroke[0].t)/1000).toFixed(1)} s. Press play.`; } };
+  skCanvas.addEventListener('pointerdown',onDown); skCanvas.addEventListener('pointermove',onMove); skCanvas.addEventListener('pointerup',onUp); skCanvas.addEventListener('pointercancel',onUp); skCanvas.addEventListener('pointerleave',()=>{cursor.visible=false;});
+  skCanvas.addEventListener('wheel',e=>{ e.preventDefault(); skDist=clamp(skDist+(e.deltaY>0?0.2:-0.2),1,8); $('#skDist').value=skDist; $('#skDistLbl').textContent=skDist.toFixed(1)+' m'; },{passive:false});
+  $('#skDist').addEventListener('input',e=>{ skDist=parseFloat(e.target.value); $('#skDistLbl').textContent=skDist.toFixed(1)+' m'; });
+  $('#skClear').addEventListener('click',()=>{ skStop(); stroke=[]; rebuild(); $('#skExport').value=''; $('#skStatus').textContent='Cleared.'; });
+  $('#skPlay').addEventListener('click',()=>{ skPlaying?skStop():skStart(); });
+  window.__skSp=sp;
+}
+function skExportObj(){ if(!stroke.length) return null; const t0=stroke[0].t; return {fps:null, source:'sketch', frames:stroke.map(p=>({t:+((p.t-t0)/1000).toFixed(3), az:+p.az.toFixed(4), el:+p.el.toFixed(4), dist_m:+p.dist.toFixed(2), d_rel:+clamp((p.dist-1)/7,0,1).toFixed(3)}))}; }
+function skExport(){ const o=skExportObj(); $('#skExport').value=o?JSON.stringify(o):''; }
+$('#skCopy').addEventListener('click',async()=>{ const v=$('#skExport').value; if(!v) return; try{ await navigator.clipboard.writeText(v); $('#skCopy').textContent='Copied'; setTimeout(()=>$('#skCopy').textContent='Copy JSON',1200);}catch(e){ $('#skExport').select(); } });
+function skSynth(kind){
+  const sr=ctx.sampleRate, len=sr*1.0, b=ctx.createBuffer(1,len,sr), d=b.getChannelData(0);
+  if(kind==='ping'){ for(let i=0;i<len;i++){ const t=i/sr; const env=Math.exp(-t*7); d[i]=env*(Math.sin(2*Math.PI*880*t)*0.6+Math.sin(2*Math.PI*1320*t)*0.25+ (Math.random()*2-1)*0.08*Math.exp(-t*40)); } }
+  else { let lp=0; for(let i=0;i<len;i++){ const t=i/sr; const env=0.55+0.45*Math.sin(2*Math.PI*3*t); const n=Math.random()*2-1; lp+= (n-lp)*0.12; d[i]=lp*env*0.9; } }
+  return b;
+}
+async function skStart(){
+  if(stroke.length<2){ $('#skStatus').textContent='Draw a stroke first.'; return; }
+  ensureCtx(); if(ctx.state==='suspended') await ctx.resume();
+  if(playing) togglePlay();
+  const kind=$('#skSound').value; let buf;
+  if(kind==='clip') buf=toMono(await getBuffer(clip+'.mono', CLIPS[clip].mono)); else buf=skSynth(kind);
+  skSrc=ctx.createBufferSource(); skSrc.buffer=buf; skSrc.loop=true; skSrc.connect(panner); skSrc.start();
+  skPlaying=true; $('#skPlay').textContent='■ Stop'; playhead.visible=true;
+  const t0=stroke[0].t, T=Math.max(300, stroke[stroke.length-1].t-t0); const start=performance.now(); let k=0;
+  const step=()=>{ if(!skPlaying) return; const e=(performance.now()-start)%T; while(k<stroke.length-1 && stroke[k+1].t-t0<=e) k++; if(k>=stroke.length-1 && e<stroke[k].t-t0) k=0; const p=stroke[k]; setPanner(p.az,p.el,p.dist); playhead.position.copy(window.__skSp(p.az,p.el,1.55)); drawRadar(p.az,p.el,p.dist,'#E94F6B'); skHud.innerHTML=`Az <b>${fmt(deg(p.az))}°</b>  El <b>${fmt(deg(p.el))}°</b><br>dist <b>${p.dist.toFixed(1)} m</b>  t <b>${(e/1000).toFixed(2)} s</b>`; oscEmit(k,{az:p.az,el:p.el,d:clamp((p.dist-1)/7,0,1),conf:1},e/1000); skRaf=requestAnimationFrame(step); };
+  step(); $('#skStatus').textContent='Looping your stroke through the HRTF panner.';
+}
+function skStop(){ skPlaying=false; if(skRaf) cancelAnimationFrame(skRaf); if(skSrc){ try{skSrc.stop();}catch(e){} skSrc.disconnect(); skSrc=null; } $('#skPlay').textContent='▶ Play stroke'; if(playhead) playhead.visible=false; }
+skInit();
+
+/* ---------- downloads capability (optional) ---------- */
+(async()=>{ try{ if(!window.claude||!window.claude.use) return; const dl=await window.claude.use('downloads'); if(!dl) return; const b=$('#skSave'); b.hidden=false; b.addEventListener('click',async()=>{ const v=$('#skExport').value; if(!v) return; try{ await dl.save({filename:'vid2spatial_sketch_traj.json', data:v}); b.textContent='Saved'; setTimeout(()=>b.textContent='Save JSON',1200);}catch(e){} }); }catch(e){} })();
+})();
+</script>

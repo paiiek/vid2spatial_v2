@@ -19,12 +19,18 @@ import numpy as np
 from typing import List, Dict, Optional, Callable
 from dataclasses import dataclass
 
+# Single source of truth for the default UDP port. Must equal the
+# spatial_engine bridge listen port (spatial_engine/bridge/vid2spatial_osc.py
+# _DEFAULTS["listen_port"] = 9000). The web demo and CLI import this.
+DEFAULT_OSC_HOST = "127.0.0.1"
+DEFAULT_OSC_PORT = 9000
+
 
 @dataclass
 class OSCConfig:
     """OSC sender configuration."""
-    host: str = "127.0.0.1"
-    port: int = 9000
+    host: str = DEFAULT_OSC_HOST
+    port: int = DEFAULT_OSC_PORT
     address_prefix: str = "/vid2spatial"
     distance_mode: str = "normalized"  # "normalized" (0-1) or "meters"
     distance_max_m: float = 10.0  # Max distance for normalization
@@ -51,8 +57,8 @@ class OSCSpatialSender:
 
     def __init__(
         self,
-        host: str = "127.0.0.1",
-        port: int = 9000,
+        host: str = DEFAULT_OSC_HOST,
+        port: int = DEFAULT_OSC_PORT,
         address_prefix: str = "/vid2spatial",
         distance_mode: str = "normalized",
         distance_max_m: float = 10.0,
@@ -265,8 +271,8 @@ class OSCSpatialSender:
 
 
 def create_osc_sender(
-    host: str = "127.0.0.1",
-    port: int = 9000,
+    host: str = DEFAULT_OSC_HOST,
+    port: int = DEFAULT_OSC_PORT,
     **kwargs
 ) -> OSCSpatialSender:
     """Factory function for OSC sender."""
@@ -282,7 +288,7 @@ def main():
     parser = argparse.ArgumentParser(description="Stream spatial trajectory via OSC")
     parser.add_argument("trajectory_json", help="Path to trajectory JSON file")
     parser.add_argument("--host", default="127.0.0.1", help="OSC host")
-    parser.add_argument("--port", type=int, default=9000, help="OSC port")
+    parser.add_argument("--port", type=int, default=DEFAULT_OSC_PORT, help="OSC port")
     parser.add_argument("--fps", type=float, default=30.0, help="Playback FPS")
     parser.add_argument("--loop", action="store_true", help="Loop playback")
     parser.add_argument("--distance-mode", choices=["normalized", "meters"],

@@ -24,7 +24,9 @@ jobs = {}  # job_id → {"status": ..., "error": ..., "result": ...}
 
 # ── OSC sender (lazy-init) ────────────────────────────────────────────────────
 _osc_client = None   # pythonosc UDPClient
-_osc_config  = {"enabled": False, "host": "127.0.0.1", "port": 9001, "format": "maxmsp"}
+# Port default follows the spatial_engine bridge listen port (9000), via osc_sender.
+from vid2spatial_pkg.osc_sender import DEFAULT_OSC_HOST, DEFAULT_OSC_PORT  # noqa: E402
+_osc_config  = {"enabled": False, "host": DEFAULT_OSC_HOST, "port": DEFAULT_OSC_PORT, "format": "maxmsp"}
 
 def _get_osc_client():
     global _osc_client, _osc_config
@@ -57,7 +59,14 @@ def send_osc_trajectory(trajectory: dict, fps: float = 30.0):
                 el_deg  = math.degrees(fr.get("el", 0.0))
                 dist_m  = fr.get("dist_m", 1.0)
                 d_rel   = fr.get("d_rel", 0.5)
-                if fmt == "spat5":
+                if fmt == "vid2spatial":
+                    # spatial_engine bridge (vid2spatial_osc.py): /vid2spatial/{azimuth,
+                    # elevation,distance}; distance normalised 1=near, 0=far (10 m).
+                    dist_norm = 1.0 - min(float(dist_m) / 10.0, 1.0)
+                    client.send_message("/vid2spatial/azimuth",   float(az_deg))
+                    client.send_message("/vid2spatial/elevation", float(el_deg))
+                    client.send_message("/vid2spatial/distance",  float(dist_norm))
+                elif fmt == "spat5":
                     # IRCAM Spat5: /source/1/aed  az el dist  (degrees, degrees, meters)
                     client.send_message("/spat5/source/1/aed",
                                         [float(az_deg), float(el_deg), float(dist_m)])
@@ -894,8 +903,8 @@ class Handler(BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             data = json.loads(self.rfile.read(length))
             _osc_config["enabled"] = bool(data.get("enabled", False))
-            _osc_config["host"]    = str(data.get("host", "127.0.0.1"))
-            _osc_config["port"]    = int(data.get("port", 9001))
+            _osc_config["host"]    = str(data.get("host", DEFAULT_OSC_HOST))
+            _osc_config["port"]    = int(data.get("port", DEFAULT_OSC_PORT))
             _osc_config["format"]  = str(data.get("format", "maxmsp"))
             _osc_client = None  # reset client so it reconnects with new settings
             self._json({"ok": True, "config": _osc_config})

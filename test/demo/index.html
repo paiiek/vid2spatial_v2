@@ -166,10 +166,11 @@
             <div style="display:flex; gap:6px; margin-bottom:4px;">
               <input id="sk-osc-host" type="text" value="127.0.0.1" placeholder="host"
                 style="background:#16213e; border:1px solid #444; color:#eee; padding:5px 8px; border-radius:5px; font-size:0.85em; width:130px;">
-              <input id="sk-osc-port" type="number" value="9001" placeholder="port"
+              <input id="sk-osc-port" type="number" value="9000" placeholder="port"
                 style="background:#16213e; border:1px solid #444; color:#eee; padding:5px 8px; border-radius:5px; font-size:0.85em; width:70px;">
             </div>
             <select id="sk-osc-format" style="background:#16213e; border:1px solid #444; color:#eee; font-size:0.85em; padding:5px 8px; border-radius:5px; margin-bottom:4px; width:100%;">
+              <option value="vid2spatial">spatial_engine bridge  (/vid2spatial/azimuth, ...)</option>
               <option value="maxmsp">Max/MSP  (/v2s/az, /v2s/el, ...)</option>
               <option value="spat5">IRCAM Spat5  (/spat5/source/1/aed)</option>
             </select>
@@ -298,11 +299,12 @@
           <div style="display:flex; gap:6px; margin-bottom:4px;">
             <input id="osc-host" type="text" value="127.0.0.1" placeholder="host"
               style="background:#16213e; border:1px solid #444; color:#eee; padding:5px 8px; border-radius:5px; font-size:0.85em; width:130px;">
-            <input id="osc-port" type="number" value="9001" placeholder="port"
+            <input id="osc-port" type="number" value="9000" placeholder="port"
               style="background:#16213e; border:1px solid #444; color:#eee; padding:5px 8px; border-radius:5px; font-size:0.85em; width:70px;">
           </div>
           <select id="osc-format" style="font-size:0.85em; padding:5px 8px; margin-bottom:4px;">
-            <option value="maxmsp">Max/MSP  (/v2s/az, /v2s/el, ...)</option>
+            <option value="vid2spatial">spatial_engine bridge  (/vid2spatial/azimuth, ...)</option>
+              <option value="maxmsp">Max/MSP  (/v2s/az, /v2s/el, ...)</option>
             <option value="spat5">IRCAM Spat5  (/spat5/source/1/aed)</option>
           </select>
           <div style="color:#666; font-size:0.75em;">Max/MSP: /v2s/az  /v2s/el  /v2s/dist  /v2s/drel<br>Spat5: /spat5/source/1/aed [az el dist]</div>

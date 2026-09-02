@@ -842,3 +842,43 @@ class TestDepthHeuristicVerification(unittest.TestCase):
         self.assertEqual(res["n"], 12)
         self.assertLess(res["mae_m"], 1e-3)
         self.assertGreater(res["spearman"], 0.999)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 11. OSC port contract — demo/CLI defaults must equal the engine bridge port
+# ─────────────────────────────────────────────────────────────────────────────
+class TestOscPortContract(unittest.TestCase):
+    """spatial_engine/bridge/vid2spatial_osc.py listens on 9000; every default
+    on the vid2spatial side (osc_sender, web demo server + HTML) must match."""
+
+    ENGINE_BRIDGE_PORT = 9000
+    BRIDGE_PATH = Path("/home/seung/mmhoa/spatial_engine/bridge/vid2spatial_osc.py")
+
+    def test_osc_sender_default(self):
+        from vid2spatial_pkg.osc_sender import DEFAULT_OSC_PORT, OSCConfig, OSCSpatialSender
+        self.assertEqual(DEFAULT_OSC_PORT, self.ENGINE_BRIDGE_PORT)
+        self.assertEqual(OSCConfig().port, self.ENGINE_BRIDGE_PORT)
+        self.assertEqual(OSCSpatialSender().config.port, self.ENGINE_BRIDGE_PORT)
+
+    def test_demo_server_default(self):
+        import re
+        src = (Path(__file__).parent / "demo" / "server.py").read_text()
+        self.assertNotIn("9001", src, msg="stale demo port 9001 still present")
+        self.assertRegex(src, r'"port":\s*DEFAULT_OSC_PORT')
+        self.assertTrue(re.search(r'data\.get\("port",\s*DEFAULT_OSC_PORT\)', src))
+
+    def test_demo_html_default(self):
+        import re
+        html = (Path(__file__).parent / "demo" / "index.html").read_text()
+        ports = re.findall(r'id="(?:sk-)?osc-port"[^>]*value="(\d+)"', html)
+        self.assertEqual(len(ports), 2, msg="expected two OSC port inputs")
+        self.assertEqual(set(ports), {str(self.ENGINE_BRIDGE_PORT)})
+
+    def test_engine_bridge_listen_port(self):
+        """Pin against the real bridge source when it is present on this machine."""
+        if not self.BRIDGE_PATH.exists():
+            self.skipTest(f"{self.BRIDGE_PATH} not present")
+        import re
+        m = re.search(r"listen_port\s*=\s*(\d+)", self.BRIDGE_PATH.read_text())
+        self.assertIsNotNone(m)
+        self.assertEqual(int(m.group(1)), self.ENGINE_BRIDGE_PORT)

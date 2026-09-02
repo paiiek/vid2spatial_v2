@@ -123,6 +123,19 @@ so they map 1:1 onto `/adm/obj/N/aed`. Note: spatial_engine has no per-object
 trajectory loader (its `TimelineJson` only carries scene-snapshot keyframes), so this
 is a documented interchange format, not a native engine file.
 
+### Depth heuristic verification
+
+```bash
+python tools/verify_depth_heuristic.py            # synthetic pinhole checks (CPU, <1s)
+python tools/verify_depth_heuristic.py --gt gt.json   # [{area, depth_m}] → MAE / AbsRel / Spearman
+```
+
+The bbox-area depth proxy (`depth_utils.compute_bbox_scale_proxy`, z ∝ 1/√area)
+and the `bbox_area` gain mode are checked for exact pinhole recovery, monotonicity,
+range, and mutual rank agreement. The repo holds no metric-depth ground truth
+(LaSOT is bboxes only; FairPlay/TAU are audio), so absolute accuracy is unverified
+until a GT file is supplied.
+
 ### Web demo (video + sketch + OSC)
 
 ```bash

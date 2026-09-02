@@ -792,3 +792,53 @@ class TestTrajectoryExport(unittest.TestCase):
         self.assertTrue(dst.exists())
         with self.assertRaises(ValueError):
             export_trajectory(self.frames, Path(self.tmp.name) / "x.yaml")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 10. depth heuristic verification — synthetic pinhole (no GT in repo)
+# ─────────────────────────────────────────────────────────────────────────────
+class TestDepthHeuristicVerification(unittest.TestCase):
+    """bbox-area depth heuristics vs a synthetic pinhole model.
+    Runs tools/verify_depth_heuristic.py checks in-process (deterministic, CPU)."""
+
+    @classmethod
+    def setUpClass(cls):
+        import importlib.util
+        p = Path(__file__).parent.parent / "tools" / "verify_depth_heuristic.py"
+        spec = importlib.util.spec_from_file_location("verify_depth_heuristic", p)
+        cls.mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cls.mod)
+
+    def test_all_synthetic_checks_pass(self):
+        res = self.mod.synthetic_checks()
+        failed = [k for k, v in res.items() if not v["pass"]]
+        self.assertEqual(failed, [], msg=f"failed checks: {failed} → {res}")
+        self.assertLess(res["pinhole_exact_recovery"]["max_abs_err_m"], 1e-3)
+        self.assertGreater(res["heuristics_rank_agree"]["spearman"], 0.999)
+
+    def test_proxy_recovers_pinhole_range(self):
+        """area=(f*S/z)^2 → proxy == z when calibrated on frame 0."""
+        from vid2spatial_pkg.depth_utils import compute_bbox_scale_proxy
+        z = np.array([1.0, 2.0, 4.0, 8.0])
+        areas = self.mod.pinhole_area(z, size_m=0.4, focal_px=600.0)
+        proxy = compute_bbox_scale_proxy(areas.tolist(), initial_depth_m=1.0)
+        np.testing.assert_allclose(proxy, z, rtol=1e-5)
+
+    def test_no_ground_truth_in_repo_is_reported(self):
+        """Repo has no metric depth GT → script must say so, not fabricate a metric."""
+        repo = Path(__file__).parent.parent
+        self.assertIsNone(self.mod.find_gt(None, repo))
+
+    def test_gt_metric_path_with_synthetic_file(self):
+        import json
+        import tempfile
+        z = np.linspace(1.5, 9.0, 12)
+        areas = self.mod.pinhole_area(z)
+        with tempfile.TemporaryDirectory() as d:
+            gt = Path(d) / "gt.json"
+            gt.write_text(json.dumps([{"area": float(a), "depth_m": float(zz)}
+                                      for a, zz in zip(areas, z)]))
+            res = self.mod.evaluate_against_gt(gt)
+        self.assertEqual(res["n"], 12)
+        self.assertLess(res["mae_m"], 1e-3)
+        self.assertGreater(res["spearman"], 0.999)

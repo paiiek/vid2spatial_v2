@@ -1,5 +1,5 @@
 <title>Vid2Spatial Playground</title>
-<meta name="description" content="Try Vid2Spatial in the browser: one drawn box on a video becomes a per-frame azimuth / elevation / distance stream, rendered binaurally live with Web Audio HRTF. Sketch a 3D trajectory by hand. See the OSC stream. Run the code.">
+<meta name="description" content="Try Vid2Spatial in the browser: one drawn box on a video becomes a per-frame azimuth / elevation / distance stream, rendered binaurally live with Web Audio HRTF. Box your own video frame by frame. Sketch a 3D trajectory by hand. See the OSC stream. Run the code.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
@@ -111,6 +111,22 @@ nav.top a:hover{color:var(--ink)}
 .file input{display:none}
 .vol{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
 
+/* your video */
+.byo{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(280px,1fr);gap:18px}
+@media (max-width:900px){.byo{grid-template-columns:1fr}}
+.stage canvas.ov.draw{pointer-events:auto;cursor:crosshair;touch-action:none}
+.stage .hint{position:absolute;left:12px;right:12px;bottom:10px;font-size:13px;color:var(--hud-ink);opacity:.85;pointer-events:none}
+.stage .empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;color:var(--hud-ink);text-align:center;padding:24px;font-size:15px}
+.stage .empty[hidden]{display:none}
+.stage .badge{position:absolute;right:12px;top:10px;font-family:"IBM Plex Mono",monospace;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--hud);background:var(--amber-soft);padding:4px 8px;border-radius:4px;pointer-events:none}
+.tl{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.tl input[type="range"]{width:100%;margin:0}
+.tl canvas{width:100%;height:26px;display:block;border-radius:4px;background:var(--surface-2);cursor:pointer}
+.kfs{display:flex;flex-wrap:wrap;gap:6px;font-family:"IBM Plex Mono",monospace;font-size:12px}
+.kfs button{appearance:none;border:1px solid var(--line);background:var(--surface);color:var(--ink);font:inherit;padding:3px 8px;border-radius:999px;cursor:pointer}
+.kfs button[aria-current="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.kfs button:hover{border-color:var(--ink)}
+
 /* sketch */
 .sketch{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(280px,1fr);gap:18px}
 @media (max-width:900px){.sketch{grid-template-columns:1fr}}
@@ -163,7 +179,7 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
   <div class="wrap">
     <div class="brand"><span class="dot"></span>Vid2Spatial</div>
     <nav class="top">
-      <a href="#video">Video</a><a href="#sketch">Sketch</a><a href="#osc">OSC</a><a href="#results">Results</a><a href="#run">Run it</a><a href="#paper">Paper</a>
+      <a href="#video">Video</a><a href="#byo">Your video</a><a href="#sketch">Sketch</a><a href="#osc">OSC</a><a href="#results">Results</a><a href="#run">Run it</a><a href="#paper">Paper</a>
     </nav>
   </div>
 </header>
@@ -246,6 +262,76 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
             <div class="vol"><span>Vol</span><input type="range" id="vol" min="0" max="1" step="0.01" value="0.8"></div>
           </div>
           <p class="note" id="audioStatus">Click play to start the audio engine.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="byo">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">01b · Your video</p>
+      <h2>Box your own video</h2>
+      <p class="lede">Load a clip from your device. Scrub to a frame, drag a box around the sound source, set how far away it is, and move on. Boxes between keyframes are interpolated. The box centre goes through the same pinhole mapping as the paper, and the video's own soundtrack is what gets spatialized. Nothing leaves your browser.</p>
+      <p class="note"><strong>You are the tracker here.</strong> This page runs no SAM2 and no depth model, so the box and the distance are yours. In the desktop pipeline you draw one box on the first frame and the rest is estimated; the paper's numbers come from that path, not this one.</p>
+    </div>
+    <div class="toolbar">
+      <label class="file btn primary">
+        <input type="file" id="byoFile" accept="video/*">
+        <span>Load a video</span>
+      </label>
+      <span class="note" id="byoName"></span>
+      <label class="field">Camera horizontal FOV <span id="byoFovLbl">60°</span>
+        <input type="range" id="byoFov" min="40" max="110" step="1" value="60">
+      </label>
+      <label class="field">Distance at this keyframe <span id="byoDistLbl">2.0 m</span>
+        <input type="range" id="byoDist" min="1" max="8" step="0.1" value="2">
+      </label>
+      <label class="field">Sound
+        <select id="byoSound">
+          <option value="video">Video's own audio</option>
+          <option value="ping">Synth ping</option>
+          <option value="noise">Pulsed noise</option>
+          <option value="user">My own sound (from above)</option>
+        </select>
+      </label>
+    </div>
+    <div class="byo">
+      <div>
+        <div class="stage" id="byoStage">
+          <video id="byoVid" playsinline preload="auto"></video>
+          <canvas class="ov draw" id="byoOv"></canvas>
+          <div class="hud" id="byoHud">Az <b>+0.0°</b>  El <b>+0.0°</b><br>d_rel <b>0.00</b>  dist <b>2.0 m</b><br>keyframes <b>0</b></div>
+          <div class="badge">manual boxes · no tracker</div>
+          <div class="frame" id="byoTime">0.00 s</div>
+          <div class="hint" id="byoHint">Drag a box on the frame. Release to add a keyframe at this time.</div>
+          <div class="empty" id="byoEmpty"><span>No video loaded.</span><span class="note" style="color:inherit;opacity:.75">Any mp4 / webm / mov your browser can play. A few seconds of one moving object works best.</span></div>
+        </div>
+        <div class="tl">
+          <input type="range" id="byoScrub" min="0" max="1" step="0.001" value="0" aria-label="Scrub">
+          <canvas id="byoTl" height="26" aria-label="Keyframes on the timeline"></canvas>
+          <div class="kfs" id="byoKfs"></div>
+        </div>
+      </div>
+      <div class="side">
+        <div class="panel">
+          <h3>Listener view (top-down)</h3>
+          <canvas class="radar" id="byoRadar" width="300" height="300" aria-label="Top-down listener view"></canvas>
+          <dl class="kv"><dt>Mapping</dt><dd>az = atan2(x − cx, f), f = (W/2)/tan(FOV/2)</dd><dt>Between keys</dt><dd>linear in box and distance</dd><dt>Distance</dt><dd>set by you (Metric3D in the pipeline)</dd></dl>
+        </div>
+        <div class="panel">
+          <div class="controls">
+            <button class="btn primary" id="byoPlay" disabled>▶ Play</button>
+            <button class="btn" id="byoDel" disabled>Delete keyframe</button>
+            <button class="btn" id="byoClear" disabled>Clear all</button>
+          </div>
+          <p class="note" id="byoStatus">Load a video to begin.</p>
+        </div>
+        <div class="panel">
+          <h3>Parameter stream (same schema as traj.json)</h3>
+          <textarea class="export" id="byoExport" readonly spellcheck="false" placeholder='{"fps":25,"w":..,"h":..,"frames":[[az,el,d_rel,cx,cy,w,h,conf],...]}'></textarea>
+          <div class="controls"><button class="btn" id="byoCopy">Copy JSON</button></div>
         </div>
       </div>
     </div>
@@ -551,7 +637,7 @@ function restartSrc(){ startSrc(); }
 async function togglePlay(){
   ensureCtx(); if (ctx.state==='suspended') await ctx.resume();
   if (playing){ vid.pause(); stopSrc(); playing=false; $('#playBtn').textContent='▶ Play'; return; }
-  await startSrc(); await vid.play(); playing=true; $('#playBtn').textContent='❚❚ Pause'; $('#bigplay').hidden=true;
+  byoStop(); await startSrc(); await vid.play(); playing=true; $('#playBtn').textContent='❚❚ Pause'; $('#bigplay').hidden=true;
 }
 $('#playBtn').addEventListener('click', togglePlay);
 $('#bigplay').addEventListener('click', togglePlay);
@@ -578,8 +664,8 @@ function drawFrame(i){
   setPanner(f.az,f.el,f.dist);
   oscEmit(i, f, vid.currentTime);
 }
-function drawRadar(az,el,dist,color){
-  const c=radar, g=c.getContext('2d'), S=c.width, m=S/2, R=S/2-14;
+function drawRadar(az,el,dist,color,cv){
+  const c=cv||radar, g=c.getContext('2d'), S=c.width, m=S/2, R=S/2-14;
   const cs=getComputedStyle(document.documentElement);
   g.clearRect(0,0,S,S);
   g.strokeStyle=cs.getPropertyValue('--line'); g.lineWidth=1;
@@ -657,7 +743,7 @@ function skSynth(kind){
 async function skStart(){
   if(stroke.length<2){ $('#skStatus').textContent='Draw a stroke first.'; return; }
   ensureCtx(); if(ctx.state==='suspended') await ctx.resume();
-  if(playing) togglePlay();
+  if(playing) togglePlay(); byoStop();
   const kind=$('#skSound').value; let buf;
   if(kind==='clip') buf=toMono(await getBuffer(clip+'.mono', CLIPS[clip].mono)); else buf=skSynth(kind);
   skSrc=ctx.createBufferSource(); skSrc.buffer=buf; skSrc.loop=true; skSrc.connect(panner); skSrc.start();
@@ -668,6 +754,119 @@ async function skStart(){
 }
 function skStop(){ skPlaying=false; if(skRaf) cancelAnimationFrame(skRaf); if(skSrc){ try{skSrc.stop();}catch(e){} skSrc.disconnect(); skSrc=null; } $('#skPlay').textContent='▶ Play stroke'; if(playhead) playhead.visible=false; }
 skInit();
+
+/* ---------- your video (manual keyframe boxes) ---------- */
+const bv=$('#byoVid'), bov=$('#byoOv'), bhud=$('#byoHud'), bradar=$('#byoRadar'), btl=$('#byoTl'), bscrub=$('#byoScrub');
+let bkeys=[], bfov=60, bdist=2.0, bplaying=false, bdrag=null, bsrc=null, bmedia=null, bmediaGain=null, bURL=null, bdur=0, bSel=-1;
+const B_EPS=0.04;
+function bFocal(){ return (bv.videoWidth/2)/Math.tan(bfov*Math.PI/360); }
+function bAngles(cx,cy){ const f=bFocal(); const x=(cx-bv.videoWidth/2)/f, y=(cy-bv.videoHeight/2)/f; const n=Math.hypot(x,y,1); return {az:Math.atan2(x,1), el:Math.asin(-y/n)}; }
+function bFind(t){ return bkeys.findIndex(k=>Math.abs(k.t-t)<B_EPS); }
+function bBox(t){
+  if(!bkeys.length) return null;
+  if(t<=bkeys[0].t) return {...bkeys[0]};
+  const L=bkeys[bkeys.length-1]; if(t>=L.t) return {...L};
+  let i=0; while(bkeys[i+1].t<t) i++;
+  const a=bkeys[i], b=bkeys[i+1], u=(t-a.t)/(b.t-a.t);
+  const m=(p,q)=>p+(q-p)*u;
+  return {t, cx:m(a.cx,b.cx), cy:m(a.cy,b.cy), w:m(a.w,b.w), h:m(a.h,b.h), dist:m(a.dist,b.dist)};
+}
+function bParams(t){ const k=bBox(t); if(!k) return null; const {az,el}=bAngles(k.cx,k.cy); return {...k, az, el, d:clamp((k.dist-1)/7,0,1), conf:1}; }
+function bDraw(){
+  const W=bov.width=bov.clientWidth*devicePixelRatio, H=bov.height=bov.clientHeight*devicePixelRatio;
+  const g=bov.getContext('2d'); g.clearRect(0,0,W,H);
+  if(!bv.videoWidth) return;
+  const sx=W/bv.videoWidth, sy=H/bv.videoHeight, t=bv.currentTime;
+  const p=bParams(t);
+  if(p){
+    const exact=bFind(t)>=0;
+    g.lineWidth=2*devicePixelRatio; g.strokeStyle=exact?'#E94F6B':'#F2B84B'; if(!exact) g.setLineDash([6*devicePixelRatio,4*devicePixelRatio]);
+    g.strokeRect((p.cx-p.w/2)*sx,(p.cy-p.h/2)*sy,p.w*sx,p.h*sy); g.setLineDash([]);
+    g.fillStyle=g.strokeStyle; g.beginPath(); g.arc(p.cx*sx,p.cy*sy,3.5*devicePixelRatio,0,7); g.fill();
+    if(bkeys.length>1){ g.strokeStyle='rgba(242,184,75,.55)'; g.lineWidth=1.5*devicePixelRatio; g.beginPath(); bkeys.forEach((k,i)=>i?g.lineTo(k.cx*sx,k.cy*sy):g.moveTo(k.cx*sx,k.cy*sy)); g.stroke(); }
+    bhud.innerHTML=`Az <b>${fmt(deg(p.az))}°</b>  El <b>${fmt(deg(p.el))}°</b><br>d_rel <b>${p.d.toFixed(2)}</b>  dist <b>${p.dist.toFixed(1)} m</b><br>keyframes <b>${bkeys.length}</b>`;
+    drawRadar(p.az,p.el,p.dist,exact?'#E94F6B':'#F2B84B',bradar);
+    if(bplaying){ setPanner(p.az,p.el,p.dist); oscEmit(0,p,t); }
+  } else {
+    bhud.innerHTML=`Az <b>—</b>  El <b>—</b><br>d_rel <b>—</b>  dist <b>${bdist.toFixed(1)} m</b><br>keyframes <b>0</b>`;
+    drawRadar(0,0,0,'#F2B84B',bradar);
+  }
+  if(bdrag){ g.strokeStyle='#E94F6B'; g.lineWidth=2*devicePixelRatio; g.setLineDash([4*devicePixelRatio,3*devicePixelRatio]); g.strokeRect(Math.min(bdrag.x0,bdrag.x1)*W,Math.min(bdrag.y0,bdrag.y1)*H,Math.abs(bdrag.x1-bdrag.x0)*W,Math.abs(bdrag.y1-bdrag.y0)*H); g.setLineDash([]); }
+  $('#byoTime').textContent=`${t.toFixed(2)} s`;
+  if(!bscrub.matches(':active')) bscrub.value=bdur?t/bdur:0;
+}
+function bDrawTl(){
+  const W=btl.width=btl.clientWidth*devicePixelRatio, H=btl.height=26*devicePixelRatio, g=btl.getContext('2d');
+  const cs=getComputedStyle(document.documentElement); g.clearRect(0,0,W,H);
+  if(!bdur) return;
+  const x=bv.currentTime/bdur*W; g.fillStyle=cs.getPropertyValue('--line'); g.fillRect(0,H/2-1,W,2);
+  bkeys.forEach((k,i)=>{ const kx=k.t/bdur*W; g.fillStyle=i===bSel?'#E94F6B':'#F2B84B'; g.beginPath(); g.moveTo(kx,3); g.lineTo(kx+6,H/2); g.lineTo(kx,H-3); g.lineTo(kx-6,H/2); g.closePath(); g.fill(); });
+  g.fillStyle=cs.getPropertyValue('--accent'); g.fillRect(x-1,0,2,H);
+}
+function bRenderKfs(){
+  const el=$('#byoKfs'); el.innerHTML='';
+  bkeys.forEach((k,i)=>{ const b=document.createElement('button'); b.textContent=`${k.t.toFixed(2)}s · ${k.dist.toFixed(1)}m`; b.setAttribute('aria-current', i===bSel); b.addEventListener('click',()=>{ bSeek(k.t); }); el.appendChild(b); });
+  $('#byoDel').disabled=bSel<0; $('#byoClear').disabled=!bkeys.length; $('#byoPlay').disabled=!bkeys.length;
+  bExport();
+}
+function bSync(){ bSel=bFind(bv.currentTime); if(bSel>=0){ bdist=bkeys[bSel].dist; $('#byoDist').value=bdist; $('#byoDistLbl').textContent=bdist.toFixed(1)+' m'; } bDraw(); bDrawTl(); bRenderKfs(); }
+function bSeek(t){ bv.currentTime=clamp(t,0,bdur||0); }
+function bExport(){
+  if(!bkeys.length||!bv.videoWidth){ $('#byoExport').value=''; return; }
+  const fps=25, n=Math.max(1,Math.round(bdur*fps)), frames=[];
+  for(let i=0;i<n;i++){ const p=bParams(i/fps); frames.push([+p.az.toFixed(4),+p.el.toFixed(4),+p.d.toFixed(3),Math.round(p.cx),Math.round(p.cy),Math.round(p.w),Math.round(p.h),1]); }
+  $('#byoExport').value=JSON.stringify({fps, w:bv.videoWidth, h:bv.videoHeight, source:'manual_keyframes', fov_deg:bfov, keyframes:bkeys.map(k=>({t:+k.t.toFixed(3),cx:Math.round(k.cx),cy:Math.round(k.cy),w:Math.round(k.w),h:Math.round(k.h),dist_m:+k.dist.toFixed(2)})), frames});
+}
+$('#byoCopy').addEventListener('click',async()=>{ const v=$('#byoExport').value; if(!v) return; try{ await navigator.clipboard.writeText(v); $('#byoCopy').textContent='Copied'; setTimeout(()=>$('#byoCopy').textContent='Copy JSON',1200);}catch(e){ $('#byoExport').select(); } });
+
+$('#byoFile').addEventListener('change', e => {
+  const f=e.target.files[0]; if(!f) return;
+  byoStop(); bkeys=[]; bSel=-1; if(bURL) URL.revokeObjectURL(bURL);
+  bURL=URL.createObjectURL(f); bv.src=bURL; bv.load();
+  $('#byoName').textContent=f.name; $('#byoEmpty').hidden=true; $('#byoStatus').textContent='Scrub to a frame and drag a box around the source.';
+});
+bv.addEventListener('loadedmetadata', () => { bdur=bv.duration||0; bv.currentTime=0; bSync(); });
+bv.addEventListener('seeked', bSync);
+bv.addEventListener('ended', () => { if(bplaying){ bv.currentTime=0; bv.play(); } });
+bscrub.addEventListener('input', e => { if(bdur) bSeek(parseFloat(e.target.value)*bdur); });
+btl.addEventListener('click', e => { const r=btl.getBoundingClientRect(); if(bdur) bSeek((e.clientX-r.left)/r.width*bdur); });
+$('#byoFov').addEventListener('input', e => { bfov=parseFloat(e.target.value); $('#byoFovLbl').textContent=bfov+'°'; bDraw(); bExport(); });
+$('#byoDist').addEventListener('input', e => { bdist=parseFloat(e.target.value); $('#byoDistLbl').textContent=bdist.toFixed(1)+' m'; if(bSel>=0){ bkeys[bSel].dist=bdist; bRenderKfs(); } bDraw(); });
+$('#byoDel').addEventListener('click', () => { if(bSel<0) return; bkeys.splice(bSel,1); bSel=-1; bSync(); $('#byoStatus').textContent=bkeys.length?`${bkeys.length} keyframes.`:'No keyframes.'; });
+$('#byoClear').addEventListener('click', () => { byoStop(); bkeys=[]; bSel=-1; bSync(); $('#byoStatus').textContent='Cleared.'; });
+
+const bPos=e=>{ const r=bov.getBoundingClientRect(); return {x:clamp((e.clientX-r.left)/r.width,0,1), y:clamp((e.clientY-r.top)/r.height,0,1)}; };
+bov.addEventListener('pointerdown', e => { if(!bv.videoWidth) return; bov.setPointerCapture(e.pointerId); if(bplaying) byoStop(); const p=bPos(e); bdrag={x0:p.x,y0:p.y,x1:p.x,y1:p.y}; bDraw(); });
+bov.addEventListener('pointermove', e => { if(!bdrag) return; const p=bPos(e); bdrag.x1=p.x; bdrag.y1=p.y; bDraw(); });
+const bUp=e=>{
+  if(!bdrag) return; const d=bdrag; bdrag=null;
+  const W=bv.videoWidth, H=bv.videoHeight, w=Math.abs(d.x1-d.x0)*W, h=Math.abs(d.y1-d.y0)*H;
+  if(w<4||h<4){ bDraw(); return; }
+  const k={t:bv.currentTime, cx:(d.x0+d.x1)/2*W, cy:(d.y0+d.y1)/2*H, w, h, dist:bdist};
+  const i=bFind(k.t); if(i>=0) bkeys[i]=k; else { bkeys.push(k); bkeys.sort((a,b)=>a.t-b.t); }
+  bSync(); $('#byoStatus').textContent=`${bkeys.length} keyframe${bkeys.length>1?'s':''}. Scrub forward and box the source again, or press play.`;
+};
+bov.addEventListener('pointerup', bUp); bov.addEventListener('pointercancel', bUp);
+
+async function byoStart(){
+  if(!bkeys.length){ $('#byoStatus').textContent='Add at least one keyframe first.'; return; }
+  ensureCtx(); if(ctx.state==='suspended') await ctx.resume();
+  if(playing) togglePlay(); if(skPlaying) skStop();
+  const kind=$('#byoSound').value;
+  if(!bmedia){ try{ bmedia=ctx.createMediaElementSource(bv); bmediaGain=ctx.createGain(); bmedia.connect(bmediaGain); bmediaGain.connect(panner); }catch(e){ bmedia=null; } }
+  if(bmediaGain) bmediaGain.gain.value = kind==='video'?1:0;
+  bv.muted = !(kind==='video' && bmedia);
+  if(kind!=='video'){ let buf; if(kind==='user'&&userBuf) buf=userBuf; else buf=skSynth(kind==='noise'?'noise':'ping'); bsrc=ctx.createBufferSource(); bsrc.buffer=buf; bsrc.loop=true; bsrc.connect(panner); bsrc.start(); }
+  bplaying=true; $('#byoPlay').textContent='■ Stop';
+  await bv.play();
+  $('#byoStatus').textContent = kind==='video' ? (bmedia ? "Video's own audio through the HRTF panner." : 'Could not route video audio; try a synth sound.') : 'Looping the sound through the HRTF panner.';
+  if(kind==='video') setTimeout(()=>{ if(!bplaying) return; const has = bv.mozHasAudio ?? (bv.audioTracks ? bv.audioTracks.length>0 : (bv.webkitAudioDecodedByteCount===undefined ? true : bv.webkitAudioDecodedByteCount>0)); if(!has) $('#byoStatus').textContent='This video seems to have no audio track. Pick a synth sound or your own file.'; }, 800);
+}
+function byoStop(){ if(!bplaying) return; bplaying=false; bv.pause(); if(bsrc){ try{bsrc.stop();}catch(e){} bsrc.disconnect(); bsrc=null; } if(bmediaGain) bmediaGain.gain.value=0; $('#byoPlay').textContent='▶ Play'; }
+$('#byoPlay').addEventListener('click', () => bplaying?byoStop():byoStart());
+$('#byoSound').addEventListener('change', () => { if(bplaying){ byoStop(); byoStart(); } });
+(function btick(){ if(bplaying||bdrag){ bDraw(); bDrawTl(); } requestAnimationFrame(btick); })();
+new ResizeObserver(()=>{ bDraw(); bDrawTl(); }).observe($('#byoStage'));
 
 /* ---------- downloads capability (optional) ---------- */
 (async()=>{ try{ if(!window.claude||!window.claude.use) return; const dl=await window.claude.use('downloads'); if(!dl) return; const b=$('#skSave'); b.hidden=false; b.addEventListener('click',async()=>{ const v=$('#skExport').value; if(!v) return; try{ await dl.save({filename:'vid2spatial_sketch_traj.json', data:v}); b.textContent='Saved'; setTimeout(()=>b.textContent='Save JSON',1200);}catch(e){} }); }catch(e){} })();

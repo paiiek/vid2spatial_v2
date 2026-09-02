@@ -214,7 +214,9 @@ def main(argv=None) -> int:
     if a.json:
         Path(a.json).write_text(json.dumps(report, indent=2))
         print(f"report → {a.json}")
-    print("\nRESULT:", "ALL SYNTHETIC CHECKS PASS" if all_pass else "SYNTHETIC CHECK FAILED")
+    print("\nRESULT:", "SYNTHETIC CONSISTENCY CHECKS PASS (not a metric-accuracy validation; "
+          "the pinhole model is the heuristic's own inverse — supply --gt for real error)"
+          if all_pass else "SYNTHETIC CHECK FAILED")
     return 0 if all_pass else 1
 
 

@@ -13,7 +13,7 @@ test/demo/index.html which these branches also touch), so NOTHING was merged the
      **No metric depth ground truth exists in this repo**; absolute depth accuracy is unverified.
    - demo OSC port 9001 → 9000 (`osc_sender.DEFAULT_OSC_PORT` single source of truth),
      new "vid2spatial" demo format that the bridge actually understands. server.py is CRLF — keep it.
-2. `feat/bridge-contract` @ 82a250d (on top of 1)
+2. `feat/bridge-contract` (on top of 1; head moves as review fixes land — use the branch name)
    - `vid2spatial_pkg/bridge_contract.yaml`, `tools/extract_bridge_contract.py --check`,
      `test/test_bridge_contract.py` (17 tests, real UDP capture + bridge run in-process), `Makefile`
      (`make test` runs the contract check first).

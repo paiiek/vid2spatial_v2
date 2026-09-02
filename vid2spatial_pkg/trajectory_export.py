@@ -24,7 +24,12 @@ Row schema (one row per tracked frame):
                         (foa_render.apply_distance_gain_lpf hardcoded branch)
     az_adm_deg   float  = -az_deg     (bridge OscTranslator.az_pipeline_to_adm)
     el_adm_deg   float  = el_deg
-    dist_adm     float  = 1 - dist_norm  (bridge OscTranslator.dist_v2s_to_adm)
+    dist_adm     float  = 1 - dist_norm  (bridge OscTranslator.dist_v2s_to_adm, the
+                        /vid2spatial/distance path, 10 m). CAVEAT: send_frame emits
+                        /vid2spatial/spatial LAST and the bridge's _handle_spatial
+                        normalises dist_m with 20 m and overwrites the track, so a
+                        live bridge currently forwards dist_m/20 = half of this
+                        column until the bridge is unified on 10 m (engine-repo item).
     confidence   float  tracker confidence (0-1), 1.0 if absent
 
 CSV: header row + rows above.  JSON: {"format": "vid2spatial-automation",
@@ -195,14 +200,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("out", help="output path (.csv or .json)")
     p.add_argument("--format", choices=["csv", "json"], default=None,
                    help="override format inferred from the output suffix")
-    p.add_argument("--fps", type=float, default=30.0)
+    p.add_argument("--fps", type=float, default=None,
+                   help="frame rate; default = the trajectory's own 'fps' (else 30)")
     p.add_argument("--object-id", type=int, default=1, help="ADM object number N")
     p.add_argument("--distance-max-m", type=float, default=10.0,
                    help="meters that map to dist_norm=0 (osc_sender default 10)")
     a = p.parse_args(argv)
     with open(a.trajectory_json) as fh:
         traj = json.load(fh)
-    out = export_trajectory(traj, a.out, a.format, fps=a.fps,
+    fps = a.fps if a.fps else float(traj.get("fps") or 30.0)
+    out = export_trajectory(traj, a.out, a.format, fps=fps,
                             object_id=a.object_id, distance_max_m=a.distance_max_m)
     n = len(_frames_of(traj))
     print(f"[export] {n} frames → {out}")

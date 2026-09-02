@@ -253,6 +253,7 @@ class PipelineConfig:
                     sofa_path=args.sofa,
                 ),
                 trajectory_path=args.save_traj,
+                automation_path=getattr(args, "automation_path", None),
             ),
         )
 

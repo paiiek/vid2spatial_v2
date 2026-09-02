@@ -26,7 +26,7 @@ jobs = {}  # job_id → {"status": ..., "error": ..., "result": ...}
 _osc_client = None   # pythonosc UDPClient
 # Port default follows the spatial_engine bridge listen port (9000), via osc_sender.
 from vid2spatial_pkg.osc_sender import DEFAULT_OSC_HOST, DEFAULT_OSC_PORT  # noqa: E402
-_osc_config  = {"enabled": False, "host": DEFAULT_OSC_HOST, "port": DEFAULT_OSC_PORT, "format": "maxmsp"}
+_osc_config  = {"enabled": False, "host": DEFAULT_OSC_HOST, "port": DEFAULT_OSC_PORT, "format": "vid2spatial"}
 
 def _get_osc_client():
     global _osc_client, _osc_config
@@ -45,7 +45,7 @@ def send_osc_trajectory(trajectory: dict, fps: float = 30.0):
     client = _get_osc_client()
     if client is None:
         return
-    fmt = _osc_config.get("format", "maxmsp")
+    fmt = _osc_config.get("format", "vid2spatial")
     frames = trajectory.get("frames", [])
     if not frames:
         return
@@ -905,7 +905,7 @@ class Handler(BaseHTTPRequestHandler):
             _osc_config["enabled"] = bool(data.get("enabled", False))
             _osc_config["host"]    = str(data.get("host", DEFAULT_OSC_HOST))
             _osc_config["port"]    = int(data.get("port", DEFAULT_OSC_PORT))
-            _osc_config["format"]  = str(data.get("format", "maxmsp"))
+            _osc_config["format"]  = str(data.get("format", "vid2spatial"))
             _osc_client = None  # reset client so it reconnects with new settings
             self._json({"ok": True, "config": _osc_config})
 

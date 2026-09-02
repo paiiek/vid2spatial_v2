@@ -119,7 +119,11 @@ python -m vid2spatial_pkg.trajectory_export traj.json traj_automation.csv --fps 
 Writes one row per tracked frame: `frame, t_s, object_id, az_deg, el_deg, dist_m,
 dist_norm, gain_lin, az_adm_deg, el_adm_deg, dist_adm, confidence`. The `*_adm`
 columns already apply the bridge contract (`az_adm = -az`, `dist_adm = 1 - dist_norm`),
-so they map 1:1 onto `/adm/obj/N/aed`. Note: spatial_engine has no per-object
+so they map 1:1 onto `/adm/obj/N/aed` via the bridge's `/vid2spatial/distance`
+path (10 m). Caveat: the bridge's `/vid2spatial/spatial` handler (emitted last by
+`send_frame`) still normalises with 20 m, so a live bridge currently forwards
+`dist_m/20` until it is unified on 10 m (engine-repo item). `automation_path` is
+read from an argparse namespace as `--automation-path` if your parser defines it. Note: spatial_engine has no per-object
 trajectory loader (its `TimelineJson` only carries scene-snapshot keyframes), so this
 is a documented interchange format, not a native engine file.
 

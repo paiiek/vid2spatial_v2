@@ -882,3 +882,21 @@ class TestOscPortContract(unittest.TestCase):
         m = re.search(r"listen_port\s*=\s*(\d+)", self.BRIDGE_PATH.read_text())
         self.assertIsNotNone(m)
         self.assertEqual(int(m.group(1)), self.ENGINE_BRIDGE_PORT)
+
+
+class TestTrajectoryExportCli:
+    def test_cli_honours_trajectory_fps(self, tmp_path):
+        """Review finding: the CLI defaulted --fps to 30 and ignored traj['fps'],
+        giving a 20% wrong time base for 25 fps trajectories."""
+        import json
+        import subprocess
+        import sys
+        traj = {"fps": 25.0, "frames": [{"frame": i, "az": 0.0, "el": 0.0, "dist": 1.0}
+                                        for i in range(3)]}
+        src = tmp_path / "traj.json"
+        src.write_text(json.dumps(traj))
+        out = tmp_path / "auto.csv"
+        subprocess.run([sys.executable, "-m", "vid2spatial_pkg.trajectory_export",
+                        str(src), str(out)], check=True, capture_output=True)
+        rows = out.read_text().splitlines()
+        assert rows[2].startswith("1,0.040000,")

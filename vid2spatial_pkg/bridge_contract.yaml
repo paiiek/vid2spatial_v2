@@ -1,0 +1,293 @@
+# vid2spatial <-> spatial_engine OSC plugin boundary.
+# `emitted:` / `conventions:` / `export:` are AUTHORED and proven by
+# test/test_bridge_contract.py against live UDP captures of every sender.
+# `bridge:` is GENERATED from the bridge source by tools/extract_bridge_contract.py
+# (`--check` fails on semantic drift). Do not hand-edit `bridge:`.
+schema: 1
+source:
+  vid2spatial_files:
+  - vid2spatial_pkg/osc_sender.py
+  - test/demo/server.py
+  - vid2spatial_pkg/trajectory_export.py
+  bridge_file: bridge/vid2spatial_osc.py
+  bridge_common: bridge/_adm_osc_common.py
+  bridge_repo: /home/seung/mmhoa/spatial_engine
+  bridge_commit: 8a56df5f58e3a25d36d5d6a2f9784fcf0a7ab227
+  adr: /home/seung/mmhoa/spatial_engine-proto/docs/adr/vid2spatial_osc_contract.md
+  adr_repo_commit: 4660f76f36e222039d356ab3cf76ae6e998dcfeb
+  generator: 'tools/extract_bridge_contract.py (bridge: section only)'
+notes:
+- Single-object stream. vid2spatial sends NO object number; the bridge keys everything on tracking id
+  "default" and ObjectMapper auto-assigns it 1 (1-based on the wire, ADR 0006). trajectory_export's object_id
+  defaults to 1 for the same reason.
+- 'az: pipeline RIGHT = +deg; bridge negates (ADM-OSC LEFT = +). el: UP = + both sides.'
+- 'dist: vid2spatial wire is NORMALISED, 1 = near, 0 = far; bridge sends 1 - dist (ADM far = 1).'
+- The bridge ALSO handles /vid2spatial/spatial (5 floats, dist in METRES) and normalises with 20 m, not
+  the sender's 10 m. send_frame emits /spatial LAST, so on a real bridge the /spatial metric path wins
+  over the /distance path for the same frame. Documented, not drift.
+- /vid2spatial/velocity, /timecode, /frame, /xyz, /distance_m hit the bridge default handler and are dropped.
+  The ADR's /vid2spatial/obj/{N}/azim family is NOT implemented by the bridge.
+transport:
+  protocol: OSC/UDP
+  sender_default_host: 127.0.0.1
+  sender_default_port: 9000
+  bridge_listen_port: 9000
+  bridge_forward_port: 9100
+conventions:
+  az_deg:
+    units: deg
+    range:
+    - -180.0
+    - 180.0
+    positive: RIGHT
+    bridge_transform: negate
+  el_deg:
+    units: deg
+    range:
+    - -90.0
+    - 90.0
+    positive: UP
+    bridge_transform: identity
+  dist_norm:
+    units: normalized
+    range:
+    - 0.0
+    - 1.0
+    near: 1.0
+    far: 0.0
+    formula: 1 - min(dist_m / distance_max_m, 1)
+    sender_distance_max_m: 10.0
+    demo_distance_max_m: 10.0
+    bridge_transform: 1 - dist_norm
+  object_numbering:
+    sender: none
+    bridge_track_key: default
+    bridge_first_id: 1
+    export_default_object_id: 1
+    base: wire_1_based
+emitted:
+  /vid2spatial/azimuth:
+    args:
+    - name: az_deg
+      type: float
+      range:
+      - -180.0
+      - 180.0
+    emitters:
+    - osc_sender.send_frame
+    - demo.vid2spatial
+    bridge: handled
+    source: vid2spatial_pkg/osc_sender.py:142
+  /vid2spatial/elevation:
+    args:
+    - name: el_deg
+      type: float
+      range:
+      - -90.0
+      - 90.0
+    emitters:
+    - osc_sender.send_frame
+    - demo.vid2spatial
+    bridge: handled
+    source: vid2spatial_pkg/osc_sender.py:143
+  /vid2spatial/distance:
+    args:
+    - name: dist_norm
+      type: float
+      range:
+      - 0.0
+      - 1.0
+    emitters:
+    - osc_sender.send_frame
+    - demo.vid2spatial
+    bridge: handled
+    condition: distance_mode == normalized (default)
+    source: vid2spatial_pkg/osc_sender.py:148
+  /vid2spatial/distance_m:
+    args:
+    - name: dist_m
+      type: float
+      range:
+      - 0.0
+      - null
+    emitters:
+    - osc_sender.send_frame
+    bridge: ignored
+    condition: distance_mode == meters
+    source: vid2spatial_pkg/osc_sender.py:150
+  /vid2spatial/velocity:
+    args:
+    - name: velocity_deg_s
+      type: float
+      range:
+      - 0.0
+      - null
+    emitters:
+    - osc_sender.send_frame
+    bridge: ignored
+    condition: send_velocity (default true)
+    source: vid2spatial_pkg/osc_sender.py:154
+  /vid2spatial/timecode:
+    args:
+    - name: timecode_s
+      type: float
+      range:
+      - 0.0
+      - null
+    emitters:
+    - osc_sender.send_frame
+    - osc_sender.send_xyz
+    bridge: ignored
+    source: vid2spatial_pkg/osc_sender.py:158
+  /vid2spatial/frame:
+    args:
+    - name: frame_idx
+      type: int
+      range:
+      - 0
+      - null
+    emitters:
+    - osc_sender.send_frame
+    bridge: ignored
+    source: vid2spatial_pkg/osc_sender.py:159
+  /vid2spatial/spatial:
+    args:
+    - name: az_deg
+      type: float
+      range:
+      - -180.0
+      - 180.0
+    - name: el_deg
+      type: float
+      range:
+      - -90.0
+      - 90.0
+    - name: dist_m
+      type: float
+      range:
+      - 0.0
+      - null
+    - name: velocity_deg_s
+      type: float
+      range:
+      - 0.0
+      - null
+    - name: timecode_s
+      type: float
+      range:
+      - 0.0
+      - null
+    emitters:
+    - osc_sender.send_frame
+    bridge: handled
+    source: vid2spatial_pkg/osc_sender.py:162
+  /vid2spatial/xyz:
+    args:
+    - name: x_m
+      type: float
+    - name: y_m
+      type: float
+    - name: z_m
+      type: float
+    emitters:
+    - osc_sender.send_xyz
+    bridge: ignored
+    source: vid2spatial_pkg/osc_sender.py:179
+export:
+  format: vid2spatial-automation
+  version: 1
+  osc_address: /adm/obj/{N}/aed
+  default_object_id: 1
+  adm_columns:
+    az_adm_deg: -az_deg
+    el_adm_deg: el_deg
+    dist_adm: 1 - dist_norm
+  source: vid2spatial_pkg/trajectory_export.py:152
+bridge:
+  file: bridge/vid2spatial_osc.py
+  listen_port: 9000
+  target_port: 9100
+  target_host: 127.0.0.1
+  iir_alpha: 0.3
+  rate_limit_hz: 60.0
+  handlers:
+    /vid2spatial/azimuth:
+      handler: _handle_azimuth
+      source: bridge/vid2spatial_osc.py:261
+      reads:
+        float: 1
+      required:
+        float: 0
+      default_if_absent: 0.0
+      track: default
+      state_fields:
+      - az
+    /vid2spatial/elevation:
+      handler: _handle_elevation
+      source: bridge/vid2spatial_osc.py:268
+      reads:
+        float: 1
+      required:
+        float: 0
+      default_if_absent: 0.0
+      track: default
+      state_fields:
+      - el
+    /vid2spatial/distance:
+      handler: _handle_distance
+      source: bridge/vid2spatial_osc.py:275
+      reads:
+        float: 1
+      required:
+        float: 0
+      default_if_absent: 0.5
+      track: default
+      state_fields:
+      - dist
+    /vid2spatial/spatial:
+      handler: _handle_spatial
+      source: bridge/vid2spatial_osc.py:282
+      reads:
+        float: 3
+      required:
+        float: 3
+      track: default
+      state_fields:
+      - az
+      - el
+      - dist
+      dist_norm_expr: max(0.0, min(1.0, 1.0 - dist_m / 20.0))
+      dist_max_m: 20.0
+  unmapped_addresses_ignored: true
+  translate:
+    az:
+      expr: -float(az_pipeline)
+      source: bridge/vid2spatial_osc.py:60
+    dist:
+      expr: 1.0 - float(dist_v2s)
+      source: bridge/vid2spatial_osc.py:65
+    el:
+      expr: float(elev)
+      source: bridge/vid2spatial_osc.py:70
+  object_numbering:
+    first_auto_id: 1
+    next_expr: max(self._map.values(), default=0) + 1
+    max_objects_default: 8
+    source: bridge/vid2spatial_osc.py:128
+  output:
+    address: /adm/obj/{N}/aed
+    args:
+    - float
+    - float
+    - float
+    arg_order:
+    - az_adm_deg
+    - el_adm_deg
+    - dist_adm
+    state_default_if_never_set:
+      az: 0.0
+      el: 0.0
+      dist: 0.5
+    smoothed: true
+    rate_limited: true
+    source: bridge/vid2spatial_osc.py:226

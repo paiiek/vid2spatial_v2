@@ -123,6 +123,24 @@ so they map 1:1 onto `/adm/obj/N/aed`. Note: spatial_engine has no per-object
 trajectory loader (its `TimelineJson` only carries scene-snapshot keyframes), so this
 is a documented interchange format, not a native engine file.
 
+### Bridge contract (plugin boundary with spatial_engine)
+
+`vid2spatial_pkg/bridge_contract.yaml` pins every OSC message vid2spatial emits
+(address, args, types, ranges, port) and the expectations of the consuming bridge
+`spatial_engine/bridge/vid2spatial_osc.py` (listen 9000 → forward 9100, `az_adm = -az`,
+`dist_adm = 1 - dist_norm`, `/adm/obj/1/aed`, 1-based object numbers). The `bridge:`
+section is generated from the bridge source; the rest is authored and proven by tests.
+
+```bash
+python tools/extract_bridge_contract.py --check     # drift alarm vs the bridge tree (exit 1); SKIP if absent
+python tools/extract_bridge_contract.py             # regenerate the bridge: section after an agreed change
+CUDA_VISIBLE_DEVICES= python -m pytest test/test_bridge_contract.py -q   # live UDP capture of every sender
+```
+
+Run both before touching `osc_sender.py`, the demo's `vid2spatial` format, or
+`trajectory_export.py`; a flipped azimuth sign, inverted distance normalisation,
+changed port, or renamed address fails.
+
 ### Depth heuristic verification
 
 ```bash
@@ -164,11 +182,15 @@ vid2spatial_pkg/
   foa_render.py           # FOA encoding, HRTF binaural, distance effects
   pipeline.py             # end-to-end pipeline class
   osc_sender.py           # OSC UDP streaming
+  bridge_contract.yaml    # OSC wire contract (emitted + bridge-side, see tools/extract_bridge_contract.py)
   config.py               # dataclass configs
   depth_utils.py          # MiDaS / DA-V2 depth backends
   multi_source.py         # multi-object spatial audio
 
 test/
+  test_unit.py            # unit suite (no models)
+  test_integration.py     # integration suite
+  test_bridge_contract.py # OSC plugin-boundary conformance vs bridge_contract.yaml
   run_e2e_final.py        # full eval on 22 LaSOT clips
   run_quant_eval.py       # AzMAE / ElMAE quantitative eval
   run_baseline_compare.py # stereo pan baseline comparison

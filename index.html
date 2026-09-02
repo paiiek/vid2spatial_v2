@@ -179,7 +179,7 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
   <div class="wrap">
     <div class="brand"><span class="dot"></span>Vid2Spatial</div>
     <nav class="top">
-      <a href="#video">Video</a><a href="#byo">Your video</a><a href="#sketch">Sketch</a><a href="#osc">OSC</a><a href="#results">Results</a><a href="#run">Run it</a><a href="#paper">Paper</a>
+      <a href="#video">Video</a><a href="#byo">Your clip</a><a href="#sketch">Sketch</a><a href="#osc">OSC</a><a href="#results">Results</a><a href="#run">Run it</a><a href="#paper">Paper</a>
     </nav>
   </div>
 </header>
@@ -215,9 +215,9 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
 <section id="video">
   <div class="wrap">
     <div class="sec-head">
-      <p class="eyebrow">01 · Video mode</p>
-      <h2>An extracted trajectory, rendered live</h2>
-      <p class="lede">Four LaSOT clips with their real Vid2Spatial output. The box you see is the tracker's estimate, not ground truth. Audio is spatialized in real time from the parameter stream with the browser's HRTF panner. Switch to the offline KEMAR render, or drop in your own sound.</p>
+      <p class="eyebrow">01 · Example · video mode</p>
+      <h2>What the pipeline produces</h2>
+      <p class="lede">Four LaSOT clips with their real Vid2Spatial output. The box you see is the tracker's estimate, not ground truth. Audio is spatialized in real time from the parameter stream with the browser's HRTF panner. Switch to the offline KEMAR render to hear the paper's path.</p>
     </div>
     <div class="toolbar">
       <label class="field">Clip
@@ -230,11 +230,6 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
           <button aria-pressed="false" data-mode="mono">Mono (no spatialization)</button>
         </div>
       </label>
-      <label class="file btn">
-        <input type="file" id="userAudio" accept="audio/*">
-        <span>Use my own sound</span>
-      </label>
-      <span class="note" id="userAudioName"></span>
     </div>
     <div class="demo">
       <div class="stage" id="stage">
@@ -271,9 +266,9 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
 <section id="byo">
   <div class="wrap">
     <div class="sec-head">
-      <p class="eyebrow">01b · Your video</p>
-      <h2>Box your own video</h2>
-      <p class="lede">Load a clip from your device. Scrub to a frame, drag a box around the sound source, set how far away it is, and move on. Boxes between keyframes are interpolated. The box centre goes through the same pinhole mapping as the paper, and the video's own soundtrack is what gets spatialized. Nothing leaves your browser.</p>
+      <p class="eyebrow">02 · Your video, your sound</p>
+      <h2>Now try it on your own clip</h2>
+      <p class="lede">Load a clip from your device. Scrub to a frame, drag a box around the sound source, set how far away it is, and move on. Boxes between keyframes are interpolated. The box centre goes through the same pinhole mapping as the paper, and the video's own soundtrack, or any sound file you load, is what gets spatialized. Nothing leaves your browser.</p>
       <p class="note"><strong>You are the tracker here.</strong> This page runs no SAM2 and no depth model, so the box and the distance are yours. In the desktop pipeline you draw one box on the first frame and the rest is estimated; the paper's numbers come from that path, not this one.</p>
     </div>
     <div class="toolbar">
@@ -293,9 +288,14 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
           <option value="video">Video's own audio</option>
           <option value="ping">Synth ping</option>
           <option value="noise">Pulsed noise</option>
-          <option value="user">My own sound (from above)</option>
+          <option value="user">My own sound file</option>
         </select>
       </label>
+      <label class="file btn">
+        <input type="file" id="userAudio" accept="audio/*">
+        <span>Load a sound</span>
+      </label>
+      <span class="note" id="userAudioName"></span>
     </div>
     <div class="byo">
       <div>
@@ -341,7 +341,7 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
 <section id="sketch">
   <div class="wrap">
     <div class="sec-head">
-      <p class="eyebrow">02 · Sketch mode</p>
+      <p class="eyebrow">03 · Sketch mode</p>
       <h2>Sources the camera never saw</h2>
       <p class="lede">Off-screen and non-literal sources are drawn by hand. Drag on the sphere to author a stroke; scroll or pinch to change distance. The stroke keeps its own timing, so playback follows the speed of your hand. This is the same raycaster convention the desktop tool uses: azimuth 0° is straight ahead, positive to the right.</p>
     </div>
@@ -386,7 +386,7 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
 <section id="osc">
   <div class="wrap">
     <div class="sec-head">
-      <p class="eyebrow">03 · OSC · runtime</p>
+      <p class="eyebrow">04 · OSC · runtime</p>
       <h2>The same stream, into any engine</h2>
       <p class="lede">Nothing is re-extracted for a new consumer. The stream is sent over UDP as plain OSC messages; verified receivers include Reaper, Max/MSP, TouchDesigner, Unreal Engine and Pure Data. The terminal mirrors whatever is playing above.</p>
     </div>
@@ -421,7 +421,7 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
 <section id="results">
   <div class="wrap">
     <div class="sec-head">
-      <p class="eyebrow">04 · Evidence</p>
+      <p class="eyebrow">05 · Evidence</p>
       <h2>What the numbers say</h2>
     </div>
     <div class="stats">
@@ -462,7 +462,7 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
 <section id="run">
   <div class="wrap">
     <div class="sec-head">
-      <p class="eyebrow">05 · Run it yourself</p>
+      <p class="eyebrow">06 · Run it yourself</p>
       <h2>From a video file to a parameter stream</h2>
       <p class="lede">The extraction step needs a GPU and SAM2. Rendering and OSC do not. The local web tool bundles video mode, sketch mode and OSC in one page served by Python.</p>
     </div>
@@ -506,7 +506,7 @@ OSCSpatialSender("127.0.0.1", 9000).stream_trajectory(traj.frames, fps=30)</code
 <section id="paper">
   <div class="wrap">
     <div class="sec-head">
-      <p class="eyebrow">06 · Paper</p>
+      <p class="eyebrow">07 · Paper</p>
       <h2>Vid2Spatial: Controllable Spatial Audio Authoring by Parameter Extraction from Video and Sketch</h2>
       <p class="lede">Seungryeol Paik, Kyungsu Kim, Kyogu Lee · Seoul National University · IEEE ISMAR 2026, poster #5498.</p>
     </div>
@@ -616,7 +616,7 @@ document.querySelectorAll('#audioMode button').forEach(b => b.addEventListener('
 }));
 $('#userAudio').addEventListener('change', async e => {
   const f=e.target.files[0]; if(!f) return;
-  try { const ab=await f.arrayBuffer(); userBuf=toMono(await ensureCtx().decodeAudioData(ab)); $('#userAudioName').textContent=f.name+' (mixed to mono, loops)'; if(mode==='kemar'){ mode='live'; document.querySelectorAll('#audioMode button').forEach(x=>x.setAttribute('aria-pressed', x.dataset.mode==='live')); } if(playing) restartSrc(); }
+  try { const ab=await f.arrayBuffer(); userBuf=toMono(await ensureCtx().decodeAudioData(ab)); $('#userAudioName').textContent=f.name+' (mixed to mono, loops)'; $('#byoSound').value='user'; if(bplaying){ byoStop(); byoStart(); } }
   catch(err){ $('#userAudioName').textContent='Could not decode that file.'; }
 });
 function stopSrc(){ if(src){ try{src.stop();}catch(e){} src.disconnect(); src=null; } }
@@ -624,8 +624,7 @@ async function startSrc(){
   stopSrc(); if(!ctx) ensureCtx();
   const key = mode==='kemar' ? clip+'.kemar' : clip+'.mono';
   let buf;
-  if (mode!=='kemar' && userBuf) buf=userBuf;
-  else buf = await getBuffer(key, mode==='kemar' ? CLIPS[clip].kemar : CLIPS[clip].mono);
+  buf = await getBuffer(key, mode==='kemar' ? CLIPS[clip].kemar : CLIPS[clip].mono);
   if (mode!=='kemar') buf=toMono(buf);
   src=ctx.createBufferSource(); src.buffer=buf; src.loop=true;
   src.connect(mode==='live' ? panner : dryGain);

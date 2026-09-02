@@ -1,0 +1,38 @@
+# HANDOFF 2026-09-02 — engine plugin boundary (branches to merge)
+
+Written by the lang_control session. The `main` checkout at /home/seung/mmhoa/vid2spatial_v2
+had ~40 uncommitted files from another session (incl. test/test_unit.py, test/demo/server.py,
+test/demo/index.html which these branches also touch), so NOTHING was merged there.
+
+## Branches (both pushed to origin, stacked)
+1. `feat/export-depth-port` @ eda2ab2 (3 commits)
+   - `vid2spatial_pkg/trajectory_export.py` — offline CSV/JSON trajectory export (ADM-OSC keys),
+     `OutputConfig.automation_path`, pipeline hook. Engine has NO per-object trajectory loader
+     (proto `core/src/scene/TimelineJson.cpp` = scene keyframes only) → interchange format.
+   - `tools/verify_depth_heuristic.py` — deterministic checks of the bbox-area depth heuristics.
+     **No metric depth ground truth exists in this repo**; absolute depth accuracy is unverified.
+   - demo OSC port 9001 → 9000 (`osc_sender.DEFAULT_OSC_PORT` single source of truth),
+     new "vid2spatial" demo format that the bridge actually understands. server.py is CRLF — keep it.
+2. `feat/bridge-contract` @ 82a250d (on top of 1)
+   - `vid2spatial_pkg/bridge_contract.yaml`, `tools/extract_bridge_contract.py --check`,
+     `test/test_bridge_contract.py` (17 tests, real UDP capture + bridge run in-process), `Makefile`
+     (`make test` runs the contract check first).
+
+## To merge (owner of the main checkout)
+```
+git fetch origin
+git stash            # or commit your in-flight work first
+git merge --ff-only origin/feat/bridge-contract   # brings both branches
+git stash pop        # resolve test_unit.py / server.py / index.html if your edits touched them
+make test            # expect 110 passed, 2 skipped; contract-check OK
+git worktree remove /home/seung/mmhoa/vid2spatial_v2-wt-export
+git worktree remove /home/seung/mmhoa/vid2spatial_v2-wt-contract
+```
+
+## Open items NOT in this repo (handed to the spatial_engine session)
+- bridge normalises `/vid2spatial/spatial` dist with 20 m, sender `/distance` uses 10 m → live distance ~2x too far.
+- ADR `/vid2spatial/obj/{N}/azim` family unimplemented in the bridge.
+
+## Open items in THIS repo (future)
+- Supply a depth GT file (`[{area, depth_m}]`) and run `tools/verify_depth_heuristic.py --gt` to get MAE/AbsRel.
+- ruff baseline: 258 pre-existing errors outside the new files.

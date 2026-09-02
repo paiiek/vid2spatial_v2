@@ -706,3 +706,89 @@ if __name__ == "__main__":
     # unittest.main()에는 -v 전달
     test_args = [sys.argv[0]] + (["-v"] if args.verbose else [])
     unittest.main(argv=test_args, verbosity=verbosity)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9. trajectory_export — offline automation file (CSV/JSON, ADM-OSC-shaped)
+# ─────────────────────────────────────────────────────────────────────────────
+class TestTrajectoryExport(unittest.TestCase):
+    """Offline export must mirror the live wire: osc_sender (dist_norm) and the
+    spatial_engine bridge (az_adm = -az, dist_adm = 1 - dist_norm)."""
+
+    def setUp(self):
+        import tempfile
+        self.tmp = tempfile.TemporaryDirectory()
+        self.frames = [
+            {"frame": 0, "az": math.radians(30.0), "el": math.radians(5.0),
+             "dist_m": 2.0, "confidence": 0.9},
+            {"frame": 2, "az": math.radians(-45.0), "el": 0.0, "dist_m": 6.0},
+            {"frame": 4, "az": 0.0, "el": 0.0, "dist_m": 25.0},   # beyond distance_max
+        ]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_rows_mirror_bridge_contract(self):
+        from vid2spatial_pkg.trajectory_export import trajectory_to_rows, COLUMNS
+        rows = trajectory_to_rows(self.frames, fps=30.0, object_id=3)
+        self.assertEqual(len(rows), 3)
+        for r in rows:
+            self.assertEqual(list(r.keys()), list(COLUMNS))
+            self.assertEqual(r["object_id"], 3)
+            self.assertAlmostEqual(r["az_adm_deg"], -r["az_deg"], places=9)
+            self.assertAlmostEqual(r["dist_adm"], 1.0 - r["dist_norm"], places=9)
+            self.assertTrue(0.0 <= r["dist_norm"] <= 1.0)
+            self.assertTrue(0.0 < r["gain_lin"] <= 1.0)
+        self.assertAlmostEqual(rows[0]["az_deg"], 30.0, places=6)
+        self.assertAlmostEqual(rows[0]["dist_norm"], 0.8, places=6)   # 1 - 2/10
+        self.assertAlmostEqual(rows[0]["t_s"], 0.0)
+        self.assertAlmostEqual(rows[1]["t_s"], 2 / 30.0)
+        self.assertAlmostEqual(rows[2]["dist_norm"], 0.0)              # clamped
+        self.assertEqual(rows[1]["confidence"], 1.0)                   # default
+
+    def test_dist_norm_matches_osc_sender(self):
+        from vid2spatial_pkg.trajectory_export import distance_to_norm
+        from vid2spatial_pkg.osc_sender import OSCSpatialSender
+        s = OSCSpatialSender(distance_max_m=10.0)
+        for d in (0.0, 0.5, 2.0, 7.5, 10.0, 40.0):
+            self.assertAlmostEqual(distance_to_norm(d, 10.0), s._normalize_distance(d), places=9)
+
+    def test_gain_monotone_nonincreasing(self):
+        from vid2spatial_pkg.trajectory_export import distance_to_gain
+        g = [distance_to_gain(d) for d in np.linspace(0.0, 12.0, 49)]
+        self.assertAlmostEqual(g[0], 1.0, places=6)
+        self.assertAlmostEqual(g[-1], 0.3 + 0.7 / 64.0, places=6)   # gain_min + ISL floor
+        self.assertTrue(all(a >= b - 1e-12 for a, b in zip(g, g[1:])))
+
+    def test_csv_roundtrip(self):
+        from vid2spatial_pkg.trajectory_export import (
+            export_trajectory, read_automation_csv, COLUMNS)
+        out = export_trajectory({"frames": self.frames}, Path(self.tmp.name) / "a.csv", fps=25.0)
+        with open(out) as fh:
+            header = fh.readline().strip().split(",")
+        self.assertEqual(header, list(COLUMNS))
+        rows = read_automation_csv(out)
+        self.assertEqual([r["frame"] for r in rows], [0, 2, 4])
+        self.assertAlmostEqual(rows[1]["t_s"], 2 / 25.0, places=5)
+        self.assertAlmostEqual(rows[1]["az_adm_deg"], 45.0, places=5)
+
+    def test_json_shape(self):
+        import json
+        from vid2spatial_pkg.trajectory_export import export_trajectory, FORMAT_NAME
+        out = export_trajectory(self.frames, Path(self.tmp.name) / "a.json", object_id=2)
+        doc = json.loads(Path(out).read_text())
+        self.assertEqual(doc["format"], FORMAT_NAME)
+        self.assertEqual(doc["osc_address"], "/adm/obj/2/aed")
+        self.assertEqual(len(doc["frames"]), 3)
+        self.assertEqual(doc["frames"][0]["object_id"], 2)
+
+    def test_cli_and_bad_format(self):
+        import json
+        from vid2spatial_pkg.trajectory_export import main, export_trajectory
+        src = Path(self.tmp.name) / "traj.json"
+        src.write_text(json.dumps({"frames": self.frames}))
+        dst = Path(self.tmp.name) / "auto.csv"
+        self.assertEqual(main([str(src), str(dst), "--fps", "24"]), 0)
+        self.assertTrue(dst.exists())
+        with self.assertRaises(ValueError):
+            export_trajectory(self.frames, Path(self.tmp.name) / "x.yaml")

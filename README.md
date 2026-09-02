@@ -109,6 +109,20 @@ sender.connect()
 sender.stream_trajectory(traj.frames, fps=30.0)
 ```
 
+### Offline automation export (no bridge needed)
+
+```bash
+python -m vid2spatial_pkg.trajectory_export traj.json traj_automation.csv --fps 30 --object-id 1
+# or .json; or set OutputConfig.automation_path in the pipeline
+```
+
+Writes one row per tracked frame: `frame, t_s, object_id, az_deg, el_deg, dist_m,
+dist_norm, gain_lin, az_adm_deg, el_adm_deg, dist_adm, confidence`. The `*_adm`
+columns already apply the bridge contract (`az_adm = -az`, `dist_adm = 1 - dist_norm`),
+so they map 1:1 onto `/adm/obj/N/aed`. Note: spatial_engine has no per-object
+trajectory loader (its `TimelineJson` only carries scene-snapshot keyframes), so this
+is a documented interchange format, not a native engine file.
+
 ### Web demo (video + sketch + OSC)
 
 ```bash

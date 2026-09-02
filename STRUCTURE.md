@@ -37,6 +37,7 @@ vid2spatial/
 │   │
 │   │  ── Output & Utilities ──
 │   ├── osc_sender.py             # OSC streaming for DAW
+│   ├── trajectory_export.py      # Offline automation export (CSV/JSON, ADM-OSC keys)
 │   └── video_utils.py            # Video I/O, scene cut/zoom detection
 │
 ├── experiments/              # Experiment scripts + results

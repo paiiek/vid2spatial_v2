@@ -715,6 +715,13 @@ class SpatialAudioPipeline:
         print('\n[1/4] Computing 3D trajectory from video...')
         self._trajectory = self._compute_trajectory()
         print(f'      → Found {len(self._trajectory["frames"])} trajectory frames')
+        if self.config.output.automation_path:
+            from .trajectory_export import export_trajectory
+            out = export_trajectory(
+                self._trajectory, self.config.output.automation_path,
+                fps=float(self._trajectory.get('fps') or 30.0),
+            )
+            print(f'      → Wrote automation export to {out}')
 
         # Step 2: Load and process audio
         print('\n[2/4] Loading and processing audio...')

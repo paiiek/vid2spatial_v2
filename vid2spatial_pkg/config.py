@@ -142,6 +142,9 @@ class OutputConfig:
 
     # Optional outputs
     trajectory_path: Optional[str] = None
+    # Offline automation export of the tracked trajectory (.csv or .json);
+    # see vid2spatial_pkg/trajectory_export.py for the row schema.
+    automation_path: Optional[str] = None
 
 
 @dataclass

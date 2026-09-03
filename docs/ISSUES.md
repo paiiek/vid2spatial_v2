@@ -104,3 +104,28 @@ composed number and the alignment caveat that comes with it.
 `vid2spatial_pkg/experimental/` holds four tracker backends that are reachable
 from `vision.py` but appear in no evaluation table, and cannot go through the
 QUANT_EVAL harness. See that package's docstring for why each one is there.
+
+---
+
+## I10 — `pipeline.run()` cannot execute in this environment (librosa vs NumPy 2.4)
+
+`pipeline.py` loads audio with `librosa.load`, which pulls in numba:
+
+```
+ImportError: Numba needs NumPy 2.3 or less. Got NumPy 2.4.
+```
+
+The installed NumPy is 2.4.4. Every entry point that loads audio through the
+pipeline therefore raises before doing any work — the single-source `run()` and
+the multi-source path alike.
+
+**Pre-existing**, not introduced by any recent change: the same `librosa.load`
+call is at `pipeline.py:728` in `09289ea`. The test suite does not catch it
+because the tests exercise the render helpers directly rather than going
+through `run()`.
+
+**Fix**: pin NumPy below 2.4, upgrade numba, or replace the `librosa.load` call
+with `soundfile.read` plus an explicit resample. The third option drops the
+librosa dependency from the audio-loading path entirely and is the smallest
+change, but it is a behaviour change (librosa resamples on load) and so is left
+as a decision rather than applied here.

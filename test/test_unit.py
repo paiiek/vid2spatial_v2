@@ -1484,7 +1484,7 @@ class TestDocumentedResults(unittest.TestCase):
 
     def test_issues_file_exists_and_tracks_the_bridge_caveat(self):
         i = self._read("docs/ISSUES.md")
-        for anchor in ("I1", "I2", "I3", "legacy-spatial"):
+        for anchor in ("I1", "I2", "I3", "I10", "legacy-spatial"):
             self.assertIn(anchor, i)
         # and the README points at it instead of carrying prose caveats
         r = self._read("README.md")

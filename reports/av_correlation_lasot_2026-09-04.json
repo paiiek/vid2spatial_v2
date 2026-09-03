@@ -1,0 +1,174 @@
+{
+  "available": true,
+  "audio_is_simulated": true,
+  "note": "LaSOT ships no audio; the true track and the decoy are real boxes from the dataset, the audio envelope is simulated from the true object's motion. This validates the estimator, not real recordings.",
+  "n_clips": 16,
+  "true_beats_decoy": 15,
+  "win_rate": 0.9375,
+  "mean_true": 0.28,
+  "mean_decoy": 0.0582,
+  "mean_margin": 0.2218,
+  "decoy_warned_frac": 0.9375,
+  "per_clip": [
+    {
+      "clip": "airplane-1",
+      "n_frames": 600,
+      "true_av_confidence": 0.2627,
+      "decoy_av_confidence": 0.0,
+      "margin": 0.2627,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "bird-16",
+      "n_frames": 600,
+      "true_av_confidence": 0.1408,
+      "decoy_av_confidence": 0.0377,
+      "margin": 0.1031,
+      "true_warned": true,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "bus-4",
+      "n_frames": 600,
+      "true_av_confidence": 0.4041,
+      "decoy_av_confidence": 0.1968,
+      "margin": 0.2073,
+      "true_warned": false,
+      "decoy_warned": false,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "coin-10",
+      "n_frames": 600,
+      "true_av_confidence": 0.2007,
+      "decoy_av_confidence": 0.1316,
+      "margin": 0.0692,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "deer-17",
+      "n_frames": 600,
+      "true_av_confidence": 0.2602,
+      "decoy_av_confidence": 0.114,
+      "margin": 0.1462,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "elephant-5",
+      "n_frames": 600,
+      "true_av_confidence": 0.0915,
+      "decoy_av_confidence": 0.0328,
+      "margin": 0.0587,
+      "true_warned": true,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "gecko-11",
+      "n_frames": 600,
+      "true_av_confidence": 0.33,
+      "decoy_av_confidence": 0.0591,
+      "margin": 0.2709,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "guitar-18",
+      "n_frames": 600,
+      "true_av_confidence": 0.4718,
+      "decoy_av_confidence": 0.0,
+      "margin": 0.4718,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "hippo-6",
+      "n_frames": 600,
+      "true_av_confidence": 0.1156,
+      "decoy_av_confidence": 0.1174,
+      "margin": -0.0018,
+      "true_warned": true,
+      "decoy_warned": true,
+      "true_beats_decoy": false
+    },
+    {
+      "clip": "licenseplate-12",
+      "n_frames": 600,
+      "true_av_confidence": 0.1618,
+      "decoy_av_confidence": 0.0,
+      "margin": 0.1618,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "monkey-19",
+      "n_frames": 600,
+      "true_av_confidence": 0.1507,
+      "decoy_av_confidence": 0.0662,
+      "margin": 0.0845,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "pig-7",
+      "n_frames": 600,
+      "true_av_confidence": 0.239,
+      "decoy_av_confidence": 0.0249,
+      "margin": 0.2142,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "rubicCube-13",
+      "n_frames": 600,
+      "true_av_confidence": 0.3082,
+      "decoy_av_confidence": 0.1176,
+      "margin": 0.1906,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "skateboard-2",
+      "n_frames": 600,
+      "true_av_confidence": 0.3709,
+      "decoy_av_confidence": 0.0269,
+      "margin": 0.344,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "swing-8",
+      "n_frames": 600,
+      "true_av_confidence": 0.5412,
+      "decoy_av_confidence": 0.0,
+      "margin": 0.5412,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    },
+    {
+      "clip": "turtle-14",
+      "n_frames": 600,
+      "true_av_confidence": 0.4306,
+      "decoy_av_confidence": 0.0064,
+      "margin": 0.4242,
+      "true_warned": false,
+      "decoy_warned": true,
+      "true_beats_decoy": true
+    }
+  ]
+}

@@ -1333,3 +1333,109 @@ class TestExperimentalBackends(unittest.TestCase):
         import importlib
         m = importlib.import_module("vid2spatial_pkg.trajectory_stabilizer")
         self.assertNotIn("experimental", m.__name__)
+
+
+# ── A4: audio-visual correlation gate ────────────────────────────────────────
+
+class TestAvCorrelation(unittest.TestCase):
+    """Nothing checked that the tracked object is the sounding one. The gate
+    reports av_confidence and warns when it is near zero."""
+
+    SR = 16000
+    FPS = 30.0
+    N = 120
+
+    def _frames(self, xs, ys=None):
+        ys = ys if ys is not None else np.zeros_like(xs)
+        return [{"frame": i, "bbox": [float(x), float(y), 20.0, 20.0]}
+                for i, (x, y) in enumerate(zip(xs, ys))]
+
+    def _audio_from_env(self, env, seed=0):
+        rng = np.random.default_rng(seed)
+        n = int(self.N / self.FPS * self.SR)
+        e = np.interp(np.arange(n) / self.SR * self.FPS, np.arange(len(env)), env)
+        return (e * rng.normal(0, 1, n)).astype(np.float32)
+
+    def test_matched_audio_scores_high_mismatched_scores_low(self):
+        from vid2spatial_pkg.av_correlation import av_confidence
+        rng = np.random.default_rng(1)
+        # object moves in bursts; audio is loud exactly during the bursts
+        speed = np.abs(rng.normal(0, 1, self.N)) ** 2
+        xs = np.cumsum(speed)
+        frames = self._frames(xs)
+        matched = self._audio_from_env(speed)
+        # an independent motion profile for the same clip length
+        other = np.abs(rng.normal(0, 1, self.N)) ** 2
+        mismatched = self._audio_from_env(other, seed=7)
+
+        hi = av_confidence(matched, self.SR, frames, self.FPS)
+        lo = av_confidence(mismatched, self.SR, frames, self.FPS)
+        self.assertGreater(hi["av_confidence"], 0.5)
+        self.assertGreater(hi["av_confidence"], lo["av_confidence"] + 0.3)
+        self.assertIsNone(hi["warning"])
+
+    def test_unrelated_audio_is_warned_about(self):
+        from vid2spatial_pkg.av_correlation import AV_CONFIDENCE_WARN, av_confidence
+        rng = np.random.default_rng(3)
+        frames = self._frames(np.cumsum(np.abs(rng.normal(0, 1, self.N))))
+        noise = rng.normal(0, 0.1, int(self.N / self.FPS * self.SR)).astype(np.float32)
+        rep = av_confidence(noise, self.SR, frames, self.FPS)
+        # the null correction must push an unrelated pairing to the floor,
+        # not merely below the matched case
+        self.assertLess(rep["av_confidence"], AV_CONFIDENCE_WARN)
+        self.assertIn("UNVERIFIED", rep["warning"])
+        self.assertGreater(rep["r_null"], 0.0)
+
+    def test_steady_sound_is_unverified_not_wrong(self):
+        """A constant envelope cannot be correlated; say so rather than
+        reporting a confident zero as evidence of a bad pairing."""
+        from vid2spatial_pkg.av_correlation import av_confidence
+        rng = np.random.default_rng(5)
+        frames = self._frames(np.cumsum(np.abs(rng.normal(0, 1, self.N))))
+        steady = rng.normal(0, 1, int(self.N / self.FPS * self.SR)).astype(np.float32)
+        rep = av_confidence(steady, self.SR, frames, self.FPS)
+        self.assertLessEqual(rep["av_confidence"], 1.0)
+        self.assertIsNotNone(rep.get("warning"))
+
+    def test_confidence_is_bounded_and_lag_is_reported(self):
+        from vid2spatial_pkg.av_correlation import av_confidence
+        rng = np.random.default_rng(11)
+        speed = np.abs(rng.normal(0, 1, self.N)) ** 2
+        frames = self._frames(np.cumsum(speed))
+        rep = av_confidence(self._audio_from_env(speed), self.SR, frames, self.FPS)
+        self.assertGreaterEqual(rep["av_confidence"], 0.0)
+        self.assertLessEqual(rep["av_confidence"], 1.0)
+        self.assertIn("lag_frames", rep)
+        self.assertEqual(rep["n_frames"], self.N)
+
+    def test_falls_back_to_angles_when_no_bbox(self):
+        from vid2spatial_pkg.av_correlation import visual_motion_energy
+        frames = [{"frame": i, "az": float(i) * 0.01, "el": 0.0} for i in range(10)]
+        e = visual_motion_energy(frames)
+        self.assertEqual(len(e), 10)
+        self.assertTrue(np.all(e >= 0))
+
+    def test_short_and_degenerate_inputs_do_not_raise(self):
+        from vid2spatial_pkg.av_correlation import av_confidence
+        for frames in ([], [{"frame": 0, "bbox": [0, 0, 1, 1]}]):
+            rep = av_confidence(np.zeros(100, np.float32), self.SR, frames, self.FPS)
+            self.assertEqual(rep["av_confidence"], 0.0)
+            self.assertIsNotNone(rep["warning"])
+
+    def test_report_reaches_the_trajectory_export(self):
+        import json
+        import os
+        import tempfile
+        from vid2spatial_pkg.trajectory_export import export_trajectory_json
+        traj = {"fps": 30.0, "av_confidence": {"av_confidence": 0.42, "warning": None},
+                "frames": [{"az": 0.0, "el": 0.0, "dist_m": 1.0}]}
+        with tempfile.TemporaryDirectory() as td:
+            p = export_trajectory_json(traj, os.path.join(td, "t.json"))
+            doc = json.loads(open(p).read())
+        self.assertEqual(doc["av_confidence"]["av_confidence"], 0.42)
+
+    def test_pipeline_scores_and_warns(self):
+        import inspect
+        from vid2spatial_pkg.pipeline import SpatialAudioPipeline
+        self.assertTrue(hasattr(SpatialAudioPipeline, "_score_av_confidence"))
+        self.assertIn("_score_av_confidence", inspect.getsource(SpatialAudioPipeline.run))

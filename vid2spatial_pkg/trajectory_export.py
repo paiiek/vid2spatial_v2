@@ -25,11 +25,11 @@ Row schema (one row per tracked frame):
     az_adm_deg   float  = -az_deg     (bridge OscTranslator.az_pipeline_to_adm)
     el_adm_deg   float  = el_deg
     dist_adm     float  = 1 - dist_norm  (bridge OscTranslator.dist_v2s_to_adm, the
-                        /vid2spatial/distance path, 10 m). CAVEAT: send_frame emits
-                        /vid2spatial/spatial LAST and the bridge's _handle_spatial
-                        normalises dist_m with 20 m and overwrites the track, so a
-                        live bridge currently forwards dist_m/20 = half of this
-                        column until the bridge is unified on 10 m (engine-repo item).
+                        /vid2spatial/distance path, 10 m). Since the A10 fix
+                        send_frame no longer emits /vid2spatial/spatial by
+                        default, so the live wire agrees with this column; the
+                        legacy bundle (--legacy-spatial) still lets the bridge
+                        re-normalise metres with its own constant.
     confidence   float  tracker confidence (0-1), 1.0 if absent
 
 CSV: header row + rows above.  JSON: {"format": "vid2spatial-automation",
@@ -145,9 +145,18 @@ def export_trajectory_json(
     fps: float = 30.0,
     object_id: int = 1,
     distance_max_m: float = 10.0,
+    av_confidence: Optional[Dict] = None,
 ) -> Path:
-    """Write the trajectory as ADM-OSC-shaped JSON. Returns the path."""
+    """Write the trajectory as ADM-OSC-shaped JSON. Returns the path.
+
+    ``av_confidence`` is the audio-visual correlation report from
+    ``av_correlation.av_confidence`` (or the trajectory's own
+    ``av_confidence`` key). It says whether the audio is plausibly related to
+    the tracked object at all; see that module for what it cannot show.
+    """
     rows = trajectory_to_rows(_frames_of(trajectory), fps, object_id, distance_max_m)
+    if av_confidence is None and isinstance(trajectory, dict):
+        av_confidence = trajectory.get("av_confidence")
     doc = {
         "format": FORMAT_NAME,
         "version": FORMAT_VERSION,
@@ -156,6 +165,7 @@ def export_trajectory_json(
         "distance_max_m": float(distance_max_m),
         "osc_address": f"/adm/obj/{int(object_id)}/aed",
         "columns": list(COLUMNS),
+        "av_confidence": av_confidence,
         "frames": rows,
     }
     path = Path(path)

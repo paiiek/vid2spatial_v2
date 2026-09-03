@@ -678,6 +678,30 @@ class SpatialAudioPipeline:
             import soundfile as sf
             sf.write(self.config.output.binaural_path, binaural.T, sr)
 
+    def _score_av_confidence(self, audio, sr, trajectory) -> Optional[Dict]:
+        """Attach an audio-visual correlation report to the trajectory.
+
+        Nothing else checks that the tracked object is the sounding one, so a
+        near-zero score is printed as a warning rather than swallowed.
+        """
+        try:
+            from .av_correlation import av_confidence as _score
+            frames = trajectory.get("frames", [])
+            intr = trajectory.get("intrinsics", {})
+            rep = _score(audio, sr, frames,
+                         fps=float(trajectory.get("fps") or intr.get("fps") or 30.0),
+                         img_w=intr.get("width"), img_h=intr.get("height"))
+        except Exception as e:  # never let a diagnostic break a render
+            print(f"[warn] audio-visual correlation failed: {e}")
+            return None
+        trajectory["av_confidence"] = rep
+        if rep.get("warning"):
+            print(f"[warn] {rep['warning']}")
+        else:
+            print(f"      → av_confidence {rep['av_confidence']:.3f} "
+                  f"(lag {rep['lag_frames']} frames)")
+        return rep
+
     # ── multi-source (offline) ───────────────────────────────────────────
 
     def _compute_trajectory_for_bbox(self, bbox) -> Dict[str, Any]:
@@ -754,6 +778,15 @@ class SpatialAudioPipeline:
         self._trajectory = trajectories[0]
 
         exports = []
+
+        print(f'\n[2/4] Loading audio for {n} sources...')
+        paths = ms.audio_paths or [self.config.audio_path] * n
+        audios, sr = [], None
+        for i, path in enumerate(paths):
+            a, sr = librosa.load(path, sr=sr, mono=True)
+            self._score_av_confidence(a, sr, trajectories[i])
+            audios.append(self._apply_room_ir(a, sr))
+
         if self.config.output.automation_path:
             from .trajectory_export import export_trajectory
             base = Path(self.config.output.automation_path)
@@ -766,12 +799,6 @@ class SpatialAudioPipeline:
                 exports.append(str(out))
                 print(f'      → object {object_id} automation: {out}')
 
-        print(f'\n[2/4] Loading audio for {n} sources...')
-        paths = ms.audio_paths or [self.config.audio_path] * n
-        audios, sr = [], None
-        for path in paths:
-            a, sr = librosa.load(path, sr=sr, mono=True)
-            audios.append(self._apply_room_ir(a, sr))
 
         print('\n[3/4] Rendering multi-source spatial audio...')
         foa = self._render_multi_source(audios, sr, trajectories)
@@ -825,6 +852,14 @@ class SpatialAudioPipeline:
         print('\n[1/4] Computing 3D trajectory from video...')
         self._trajectory = self._compute_trajectory()
         print(f'      → Found {len(self._trajectory["frames"])} trajectory frames')
+
+        # Step 2: Load and process audio
+        print('\n[2/4] Loading and processing audio...')
+        audio, sr = librosa.load(self.config.audio_path, sr=None, mono=True)
+        print(f'      → Loaded {len(audio)} samples at {sr} Hz ({len(audio)/sr:.2f}s)')
+
+        self._score_av_confidence(audio, sr, self._trajectory)
+
         if self.config.output.automation_path:
             from .trajectory_export import export_trajectory
             out = export_trajectory(
@@ -832,11 +867,6 @@ class SpatialAudioPipeline:
                 fps=float(self._trajectory.get('fps') or 30.0),
             )
             print(f'      → Wrote automation export to {out}')
-
-        # Step 2: Load and process audio
-        print('\n[2/4] Loading and processing audio...')
-        audio, sr = librosa.load(self.config.audio_path, sr=None, mono=True)
-        print(f'      → Loaded {len(audio)} samples at {sr} Hz ({len(audio)/sr:.2f}s)')
 
         audio_processed = self._apply_room_ir(audio, sr)
 

@@ -12,6 +12,26 @@ class CameraConfig:
     fov_deg: float = 60.0
     sample_stride: int = 1
 
+    # --- FOV provenance (gap item A2) -------------------------------------
+    # fov_deg above is only the FALLBACK. When fov_from_metadata is True the
+    # pipeline asks camera_intrinsics.resolve_fov() to read the real FOV from
+    # the container (sidecar JSON / exiftool / ffprobe) and warns loudly when
+    # it has to fall back. The value actually used and where it came from are
+    # written into the trajectory JSON as intrinsics.fov_deg / fov_source.
+    fov_from_metadata: bool = True
+    fov_explicit: bool = False          # user passed --fov-deg: metadata is skipped
+    focal_35mm: Optional[float] = None  # --focal-35mm, converted to a FOV
+    fov_source: str = "default"         # filled in by the pipeline at run time
+    fov_detail: str = ""
+
+    # --- camera-motion compensation (gap item A3) -------------------------
+    # "camera_frame": azimuth is relative to the camera (the listener turns
+    #                 with the camera). This is the historical behaviour.
+    # "world_frame":  estimated camera yaw is subtracted, so a stationary
+    #                 source stays put in the sound field during a pan.
+    motion_mode: str = "camera_frame"
+    estimate_camera_motion: bool = False  # implied by motion_mode="world_frame"
+
 
 @dataclass
 class TrackingConfig:
@@ -193,6 +213,14 @@ class PipelineConfig:
                 camera=CameraConfig(
                     fov_deg=args.fov_deg,
                     sample_stride=args.stride,
+                    fov_from_metadata=getattr(args, "fov_from_metadata", True),
+                    # An explicitly passed FOV must win over container metadata.
+                    # argparse cannot distinguish "user typed 60" from "default
+                    # 60", so anything other than the library default counts.
+                    fov_explicit=(float(args.fov_deg) != CameraConfig.fov_deg),
+                    focal_35mm=getattr(args, "focal_35mm", None),
+                    motion_mode=getattr(args, "motion_mode", "camera_frame"),
+                    estimate_camera_motion=getattr(args, "estimate_camera_motion", False),
                 ),
                 tracking=TrackingConfig(
                     method=args.method,

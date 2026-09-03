@@ -438,3 +438,217 @@ class TestHrirInterpolation:
         # interpolation must remove the big discrete jumps
         assert bary["step_max_deg"] < near["step_max_deg"] * 0.6
         assert bary["mean_abs_second_diff_deg"] < near["mean_abs_second_diff_deg"]
+
+
+# ---------------------------------------------------------------------------
+# A16 — confidence-aware rendering during lost episodes
+# ---------------------------------------------------------------------------
+def _traj_with_lost(n=60, lost_slice=slice(20, 35), fps=30.0):
+    frames = []
+    for i in range(n):
+        conf = 0.2 if lost_slice.start <= i < lost_slice.stop else 0.9
+        # azimuth ramps steadily; during the lost run it lunges off to the side
+        az = math.radians(i * 0.5)
+        if lost_slice.start <= i < lost_slice.stop:
+            az = math.radians(60.0)
+        frames.append({"frame": i, "az": az, "el": 0.0, "confidence": conf,
+                       "dist_m": 5.0, "w": 80, "h": 80})
+    return {"frames": frames, "fps": fps, "intrinsics": {"width": 1280, "height": 720}}
+
+
+class TestConfidenceAwareRender:
+    def test_freeze_holds_the_last_confident_azimuth(self):
+        from vid2spatial_pkg.foa_render import freeze_lost_frames
+        traj = _traj_with_lost()
+        out, stats = freeze_lost_frames(traj["frames"])
+        assert stats["n_lost"] == 15
+        assert stats["n_episodes"] == 1
+        held = math.radians(19 * 0.5)
+        for i in range(20, 35):
+            assert out[i]["az"] == pytest.approx(held)
+            assert out[i]["lost"] is True
+            # the bad measurement is preserved, not destroyed
+            assert out[i]["az_measured"] == pytest.approx(math.radians(60.0))
+        assert out[35]["az"] == pytest.approx(math.radians(35 * 0.5))
+
+    def test_azimuth_is_flat_across_the_lost_episode(self):
+        """The A16 acceptance test."""
+        from vid2spatial_pkg.foa_render import freeze_lost_frames
+        traj = _traj_with_lost()
+        raw = np.degrees([f["az"] for f in traj["frames"]])
+        out, _ = freeze_lost_frames(traj["frames"])
+        fixed = np.degrees([f["az"] for f in out])
+        lost = slice(20, 35)
+        assert float(np.ptp(raw[lost])) == pytest.approx(0.0)     # the lunge itself is flat
+        # the damage is the JUMP into and out of the episode
+        assert abs(raw[20] - raw[19]) > 40.0
+        assert abs(fixed[20] - fixed[19]) < 1e-9
+        assert float(np.ptp(fixed[lost])) == pytest.approx(0.0)
+
+    def test_no_confidence_field_is_a_no_op(self):
+        from vid2spatial_pkg.foa_render import freeze_lost_frames
+        frames = [{"frame": i, "az": 0.1 * i, "el": 0.0} for i in range(10)]
+        out, stats = freeze_lost_frames(frames)
+        assert stats["n_lost"] == 0
+        assert [f["az"] for f in out] == [f["az"] for f in frames]
+        assert "lost" not in out[0]        # untouched objects, not rewritten
+
+    def test_duck_and_diffuse_curves(self):
+        from vid2spatial_pkg.foa_render import build_lost_curves
+        traj = _traj_with_lost()
+        sr, fps = 8000, 30.0
+        T = int(len(traj["frames"]) / fps * sr)
+        duck, diffuse = build_lost_curves(traj["frames"], T, sr, fps,
+                                          duck_db=-9.0, diffuse_boost=0.35)
+        assert duck.shape == (T,) and diffuse.shape == (T,)
+        assert duck.max() == pytest.approx(1.0, abs=1e-3)
+        assert duck.min() < 0.45           # -9 dB is 0.355
+        assert diffuse.max() > 0.30
+        assert diffuse.min() == pytest.approx(0.0, abs=1e-3)
+        # ducked exactly where the track is lost
+        mid = int((27 / fps) * sr)
+        assert duck[mid] < 0.4 and diffuse[mid] > 0.3
+
+    def test_curves_are_flat_when_nothing_is_lost(self):
+        from vid2spatial_pkg.foa_render import build_lost_curves
+        frames = [{"frame": i, "az": 0.0, "el": 0.0, "confidence": 1.0}
+                  for i in range(30)]
+        duck, diffuse = build_lost_curves(frames, 8000, 8000, 30.0)
+        assert np.allclose(duck, 1.0)
+        assert np.allclose(diffuse, 0.0)
+
+    def test_confidence_gate_is_on_by_default_in_the_renderers(self):
+        import inspect
+        from vid2spatial_pkg.foa_render import (
+            render_foa_from_trajectory, render_binaural_from_trajectory)
+        for fn in (render_foa_from_trajectory, render_binaural_from_trajectory):
+            p = inspect.signature(fn).parameters
+            assert p["confidence_gate"].default is True
+            assert p["conf_threshold"].default == pytest.approx(0.5)
+
+
+# ---------------------------------------------------------------------------
+# A7 — physical distance law with distance-coupled DRR
+# ---------------------------------------------------------------------------
+class TestPhysicalDistanceLaw:
+    def test_direct_gain_is_inverse_distance(self):
+        from vid2spatial_pkg.foa_render import physical_direct_gain
+        d = np.array([1.0, 2.0, 4.0, 8.0])
+        g = physical_direct_gain(d, d_ref_m=1.0, gain_floor=1e-6)
+        db = 20 * np.log10(g)
+        # -6 dB per doubling, exactly
+        assert np.allclose(np.diff(db), -6.0206, atol=1e-3)
+
+    def test_gain_floor_and_reference_distance(self):
+        from vid2spatial_pkg.foa_render import physical_direct_gain
+        g = physical_direct_gain(np.array([0.1, 0.5, 1.0]), d_ref_m=1.0)
+        assert np.allclose(g, 1.0)          # never louder than the reference
+        far = physical_direct_gain(np.array([1e6]), gain_floor=0.02)
+        assert far[0] == pytest.approx(0.02)
+
+    def test_air_absorption_cutoff_falls_with_distance(self):
+        from vid2spatial_pkg.foa_render import air_absorption_cutoff_hz
+        fc = air_absorption_cutoff_hz(np.array([1.0, 10.0, 100.0, 1000.0]))
+        assert np.all(np.diff(fc) <= 0)
+        # ISO 9613-1: 3 dB of loss at ~100 m lands in the low kHz
+        assert 1000.0 < fc[2] < 6000.0
+
+    def test_physical_wet_curve_holds_reverb_absolute(self):
+        from vid2spatial_pkg.foa_render import (
+            build_physical_wet_curve, physical_direct_gain)
+        d = np.array([1.0, 2.0, 4.0, 8.0])
+        g = physical_direct_gain(d, gain_floor=0.005)
+        wet = build_physical_wet_curve(d, gain_floor=0.005, reverb_send=0.02)
+        absolute_reverb = wet * g            # must be constant by construction
+        assert np.allclose(absolute_reverb, absolute_reverb[0], rtol=1e-5)
+        assert np.all(np.diff(wet) > 0)      # wetter with distance
+
+    def test_existing_modes_are_untouched(self):
+        """A7 must not perturb any shipped stimulus."""
+        from vid2spatial_pkg.foa_render import apply_distance_gain_lpf
+        rng = np.random.default_rng(2)
+        x = rng.standard_normal(4000).astype(np.float32)
+        d = np.linspace(1.0, 10.0, 4000).astype(np.float32)
+        d_rel = np.linspace(0.0, 1.0, 4000).astype(np.float32)
+        a = apply_distance_gain_lpf(x, 16000, d, d_rel)
+        b = apply_distance_gain_lpf(x, 16000, d, d_rel)
+        assert np.array_equal(a, b)
+        # the legacy span really is the documented ~10.5 dB
+        span_db = 20 * math.log10(1.0 / 0.3)
+        assert span_db == pytest.approx(10.46, abs=0.05)
+
+    def test_drr_falls_monotonically_at_roughly_the_physical_rate(self):
+        """The A7 acceptance measurement."""
+        harness = REPO_ROOT / "test" / "run_drr_check.py"
+        spec = importlib.util.spec_from_file_location("drr_check", harness)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        res = mod.run(distances=[1.0, 2.0, 4.0, 8.0], modes=("legacy", "physical"))
+        phys = res["modes"]["physical"]
+        leg = res["modes"]["legacy"]
+        assert phys["drr_monotonic"]
+        assert phys["drr_db_per_doubling"] == pytest.approx(-6.0, abs=1.0)
+        # and the legacy curve does NOT follow distance anywhere near that rate
+        assert abs(leg["drr_db_per_doubling"]) < 2.5
+
+
+# ---------------------------------------------------------------------------
+# A14 — Doppler from the radial velocity
+# ---------------------------------------------------------------------------
+def _dominant_hz(x: np.ndarray, sr: int) -> float:
+    w = np.hanning(len(x))
+    spec = np.abs(np.fft.rfft(x * w))
+    return float(np.fft.rfftfreq(len(x), 1.0 / sr)[int(np.argmax(spec))])
+
+
+class TestDoppler:
+    def test_static_source_is_a_no_op(self):
+        from vid2spatial_pkg.foa_render import apply_doppler
+        sr = 16000
+        t = np.arange(sr, dtype=np.float64) / sr
+        x = np.sin(2 * np.pi * 440 * t).astype(np.float32)
+        y = apply_doppler(x, sr, np.full(sr, 7.0, dtype=np.float32))
+        assert _dominant_hz(y, sr) == pytest.approx(_dominant_hz(x, sr), abs=2.0)
+
+    def test_approaching_source_shifts_pitch_up(self):
+        """The A14 acceptance test: synthetic approach, measured shift."""
+        from vid2spatial_pkg.foa_render import apply_doppler, SPEED_OF_SOUND_M_S
+        sr, f0, dur = 16000, 1000.0, 2.0
+        n = int(sr * dur)
+        t = np.arange(n) / sr
+        x = np.sin(2 * np.pi * f0 * t).astype(np.float32)
+        v = -34.3                                   # approaching at 0.1 c
+        dist = (100.0 + v * t).astype(np.float32)
+        y = apply_doppler(x, sr, dist)
+        seg = slice(sr // 4, sr // 4 + sr // 2)
+        expected = f0 * (1.0 - v / SPEED_OF_SOUND_M_S)
+        assert _dominant_hz(y[seg], sr) == pytest.approx(expected, rel=0.02)
+        assert _dominant_hz(y[seg], sr) > f0
+
+    def test_receding_source_shifts_pitch_down(self):
+        from vid2spatial_pkg.foa_render import apply_doppler
+        sr, f0, dur = 16000, 1000.0, 2.0
+        n = int(sr * dur)
+        t = np.arange(n) / sr
+        x = np.sin(2 * np.pi * f0 * t).astype(np.float32)
+        dist = (10.0 + 34.3 * t).astype(np.float32)
+        y = apply_doppler(x, sr, dist)
+        seg = slice(sr // 4, sr // 4 + sr // 2)
+        assert _dominant_hz(y[seg], sr) < f0 - 50.0
+
+    def test_rate_is_clamped_against_depth_glitches(self):
+        from vid2spatial_pkg.foa_render import apply_doppler
+        sr = 8000
+        x = np.random.default_rng(1).standard_normal(sr).astype(np.float32)
+        dist = np.full(sr, 5.0, dtype=np.float32)
+        dist[sr // 2] = 5000.0                      # a one-sample depth runaway
+        y = apply_doppler(x, sr, dist, max_ratio=0.25)
+        assert np.all(np.isfinite(y))
+        assert y.shape == x.shape
+
+    def test_doppler_is_opt_in(self):
+        import inspect
+        from vid2spatial_pkg.foa_render import (
+            render_foa_from_trajectory, render_binaural_from_trajectory)
+        for fn in (render_foa_from_trajectory, render_binaural_from_trajectory):
+            assert inspect.signature(fn).parameters["doppler"].default is False

@@ -268,7 +268,6 @@ def smooth_limit_angles(
     - smooth_ms: moving average window (milliseconds)
     - max_deg_per_s: if set, clamp per-sample delta to this rate
     """
-    T = az_s.shape[0]
     az = az_s.astype(np.float32).copy()
     el = el_s.astype(np.float32).copy()
     # moving average smoothing
@@ -656,7 +655,6 @@ def render_binaural_from_trajectory(
     for full-bandwidth spatial cues (ILD, ITD, pinna).
     Independent from the FOA path.
     """
-    import os
     audio_proc, sr, az_s, el_s, dist_s, d_rel_s, frames = _load_and_prepare(
         audio_path, trajectory, smooth_ms, dist_gain_k, dist_lpf_min_hz, dist_lpf_max_hz,
         gain_min=gain_min,
@@ -836,7 +834,6 @@ def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
         flen = end - start
 
         # HRIR lookup at frame center
-        center = min(start + hop, T - 1)
         az_med = float(np.median(az_s[start:min(start + hop, T)]))
         el_med = float(np.median(el_s[start:min(start + hop, T)]))
         hrir = find_nearest_hrir(az_med, el_med)
@@ -958,7 +955,7 @@ def foa_to_binaural_sofa(foa_sn3d: np.ndarray, sr: int, sofa_path: str) -> np.nd
         peak = float(np.max(np.abs(binlr)) + 1e-9)
         binlr = binlr / (peak * 1.01)  # always normalize to use full dynamic range
         return binlr.astype(np.float32)
-    except Exception as e:
+    except Exception:
         import traceback
         traceback.print_exc()
         return foa_to_binaural(foa_sn3d, sr)

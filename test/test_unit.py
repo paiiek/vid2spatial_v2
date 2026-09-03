@@ -1230,3 +1230,56 @@ class TestMultiSourceFoa:
         from vid2spatial_pkg.multi_source import encode_multi_source_foa
         with pytest.raises(ValueError):
             encode_multi_source_foa([np.zeros(100, np.float32)], [])
+
+
+# ── A9: dead vision_refactored branch + unimplemented occlusion estimation ────
+
+class TestDeadModuleImports(unittest.TestCase):
+    """`pipeline.py` imported two modules that have never existed.
+
+    `.vision_refactored` failed on every import (the function it wanted is in
+    `vision.py`), so `USE_REFACTORED_VISION` was permanently False and every
+    branch on it dead. `.occlusion` failed inside a broad `except Exception`,
+    so `occlusion.estimate=True` printed a warning and rendered un-occluded
+    audio -- a silent wrong result.
+    """
+
+    def test_no_vision_refactored_import_remains(self):
+        import inspect
+        from vid2spatial_pkg import pipeline
+        src = inspect.getsource(pipeline)
+        self.assertNotIn("vision_refactored", src)
+        self.assertNotIn("USE_REFACTORED_VISION", src)
+        self.assertNotIn("use_refactored_vision",
+                         inspect.signature(pipeline.SpatialAudioPipeline.__init__).parameters)
+
+    def test_the_refactored_entry_point_lives_in_vision(self):
+        """Why the import could never have worked."""
+        from vid2spatial_pkg import vision
+        self.assertTrue(hasattr(vision, "compute_trajectory_3d_refactored"))
+        import importlib.util
+        self.assertIsNone(importlib.util.find_spec("vid2spatial_pkg.vision_refactored"))
+
+    def test_occlusion_estimate_fails_loudly(self):
+        from vid2spatial_pkg.config import OcclusionConfig
+        with self.assertRaises(ValueError) as cm:
+            OcclusionConfig(enabled=True, estimate=True)
+        self.assertIn("not implemented", str(cm.exception))
+        # and through the config-file route, not just the constructor
+        from vid2spatial_pkg.config import PipelineConfig
+        with self.assertRaises(ValueError):
+            PipelineConfig.from_dict({
+                "video_path": "v.mp4", "audio_path": "a.wav",
+                "occlusion": {"enabled": True, "estimate": True},
+            })
+
+    def test_occlusion_json_path_route_still_works(self):
+        from vid2spatial_pkg.config import OcclusionConfig
+        c = OcclusionConfig(enabled=True, json_path="occ.json")
+        self.assertFalse(c.estimate)
+        self.assertEqual(c.json_path, "occ.json")
+
+    def test_no_occlusion_module_import_remains(self):
+        import inspect
+        from vid2spatial_pkg import pipeline
+        self.assertNotIn("from .occlusion import", inspect.getsource(pipeline))

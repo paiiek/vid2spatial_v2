@@ -12,14 +12,6 @@ import numpy as np
 from .config import PipelineConfig
 from .vision import compute_trajectory_3d
 
-# Try to import refactored version if available
-try:
-    from .vision_refactored import compute_trajectory_3d_refactored
-    USE_REFACTORED_VISION = True
-except ImportError:
-    compute_trajectory_3d_refactored = None
-    USE_REFACTORED_VISION = False
-
 from .foa_render import (
     interpolate_angles_distance,
     smooth_limit_angles,
@@ -46,7 +38,6 @@ class SpatialAudioPipeline:
     def __init__(
         self,
         config: PipelineConfig,
-        use_refactored_vision: bool = True,
         use_v2_tracker: bool = True,
         use_depth_enhance: bool = True,
         depth_priority: Optional[tuple] = None,
@@ -56,7 +47,6 @@ class SpatialAudioPipeline:
 
         Args:
             config: Complete pipeline configuration
-            use_refactored_vision: Whether to use refactored vision module (default: True)
             use_v2_tracker: Use V2SpatialTracker (adaptive-K, confidence gating,
                             variance-gated depth, adaptive Kalman).  Default True.
                             Falls back to legacy compute_trajectory_3d on import error.
@@ -67,7 +57,6 @@ class SpatialAudioPipeline:
                             E.g. ("dist_m",) to skip blended/render fields.
         """
         self.config = config
-        self.use_refactored_vision = use_refactored_vision and USE_REFACTORED_VISION
         self.use_v2_tracker = use_v2_tracker
         self.use_depth_enhance = use_depth_enhance
         self.depth_priority = depth_priority
@@ -290,11 +279,7 @@ class SpatialAudioPipeline:
                 print(f'[warn] V2SpatialTracker failed ({e}), falling back to legacy vision module')
 
         # ── Legacy vision path (fallback) ─────────────────────────────────
-        # Choose vision implementation
-        compute_fn = compute_trajectory_3d_refactored if self.use_refactored_vision else compute_trajectory_3d
-
-        if self.use_refactored_vision:
-            print('[info] Using refactored vision module (legacy path)')
+        compute_fn = compute_trajectory_3d
 
         # Compute trajectory
         traj = compute_fn(
@@ -525,27 +510,9 @@ class SpatialAudioPipeline:
                 s = np.arange(T, dtype=np.float32)
                 return np.interp(s, idx_samples, occ).astype(np.float32)
 
-        # Estimate from video
-        if self.config.occlusion.estimate:
-            try:
-                from .occlusion import estimate_occlusion_timeline
-                print('[info] Estimating occlusion from video...')
-                occ_tl = estimate_occlusion_timeline(
-                    self.config.video_path,
-                    self._trajectory["frames"],
-                    use_depth=True,
-                    stride=self.config.vision.camera.sample_stride
-                )
-                idx = np.array([it.get("frame", 0) for it in occ_tl["frames"]], np.float32)
-                occ = np.array([float(it.get("occ", 0.0)) for it in occ_tl["frames"]], np.float32)
-                _fps = float(self._trajectory.get("fps", 30.0)) if self._trajectory else 30.0
-                _spf = float(self.config.spatial._sr if hasattr(self.config.spatial, '_sr') else 48000) / _fps
-                idx_samples = idx * _spf
-                s = np.arange(T, dtype=np.float32)
-                return np.interp(s, idx_samples, occ).astype(np.float32)
-            except Exception as e:
-                print(f"[warn] occlusion estimation failed: {e}")
-
+        # Estimation from video is unimplemented and now rejected by
+        # OcclusionConfig.__post_init__, so reaching here means json_path was
+        # absent or unreadable.
         return None
 
     def _render_spatial_audio(

@@ -109,10 +109,28 @@ class SpatialConfig:
 
 @dataclass
 class OcclusionConfig:
-    """Occlusion handling configuration."""
+    """Occlusion handling configuration.
+
+    Only the ``json_path`` route is implemented: an externally produced
+    occlusion timeline is loaded and interpolated onto the audio clock.
+    ``estimate=True`` would need ``vid2spatial_pkg/occlusion.py``, which has
+    never existed -- the pipeline's import of it used to raise into a broad
+    ``except Exception`` and degrade to no occlusion with only a warning, so a
+    run configured for estimated occlusion silently produced un-occluded audio.
+    It now fails at construction time instead.
+    """
     enabled: bool = False
     estimate: bool = False
     json_path: Optional[str] = None
+
+    def __post_init__(self):
+        if self.estimate:
+            raise ValueError(
+                "occlusion.estimate=True is not implemented: there is no "
+                "vid2spatial_pkg/occlusion.py, so no occlusion timeline can be "
+                "estimated from video. Supply occlusion.json_path with a "
+                '{"frames": [{"frame": int, "occ": float}, ...]} document instead.'
+            )
 
 
 @dataclass

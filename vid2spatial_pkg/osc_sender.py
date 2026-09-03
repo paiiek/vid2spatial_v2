@@ -36,6 +36,13 @@ class OSCConfig:
     distance_max_m: float = 10.0  # Max distance for normalization
     send_velocity: bool = True
     send_timecode: bool = True
+    # /vid2spatial/spatial carries dist in METRES and the engine bridge
+    # normalises it with its own DISTANCE_MAX_M. When that constant differs
+    # from distance_max_m the bundle -- which send_frame emitted LAST --
+    # silently overrode the correct /distance value (measured 2x too near
+    # against a 20 m bridge). /distance is authoritative; the bundle is now
+    # opt-in for legacy bridges only.
+    legacy_spatial: bool = False
 
 
 class OSCSpatialSender:
@@ -62,6 +69,7 @@ class OSCSpatialSender:
         address_prefix: str = "/vid2spatial",
         distance_mode: str = "normalized",
         distance_max_m: float = 10.0,
+        legacy_spatial: bool = False,
     ):
         """
         Initialize OSC sender.
@@ -72,6 +80,8 @@ class OSCSpatialSender:
             address_prefix: OSC address prefix
             distance_mode: "normalized" (0-1, 1=near) or "meters"
             distance_max_m: Max distance for normalization
+            legacy_spatial: also emit the /vid2spatial/spatial bundle
+                (metres). Off by default -- see OSCConfig.legacy_spatial.
         """
         self.config = OSCConfig(
             host=host,
@@ -79,6 +89,7 @@ class OSCSpatialSender:
             address_prefix=address_prefix,
             distance_mode=distance_mode,
             distance_max_m=distance_max_m,
+            legacy_spatial=legacy_spatial,
         )
         self.client = None
         self._connected = False
@@ -158,11 +169,13 @@ class OSCSpatialSender:
             self.client.send_message(f"{prefix}/timecode", float(timecode_s))
             self.client.send_message(f"{prefix}/frame", int(frame_idx))
 
-        # Also send bundled message for atomic updates
-        self.client.send_message(
-            f"{prefix}/spatial",
-            [float(az_deg), float(el_deg), float(dist_m), float(velocity_deg_s), float(timecode_s)]
-        )
+        # Legacy bundled message (metres). Opt-in: it is normalised by the
+        # bridge's own constant and, arriving last, overrides /distance.
+        if self.config.legacy_spatial:
+            self.client.send_message(
+                f"{prefix}/spatial",
+                [float(az_deg), float(el_deg), float(dist_m), float(velocity_deg_s), float(timecode_s)]
+            )
 
     def send_xyz(self, x: float, y: float, z: float, timecode_s: float = 0.0):
         """
@@ -293,6 +306,10 @@ def main():
     parser.add_argument("--loop", action="store_true", help="Loop playback")
     parser.add_argument("--distance-mode", choices=["normalized", "meters"],
                         default="normalized", help="Distance format")
+    parser.add_argument("--legacy-spatial", action="store_true",
+                        help="Also emit the legacy /vid2spatial/spatial bundle (metres). "
+                             "The bridge normalises it with its own constant and it arrives "
+                             "last, so it overrides /distance -- enable only for old bridges.")
 
     args = parser.parse_args()
 
@@ -311,6 +328,7 @@ def main():
         host=args.host,
         port=args.port,
         distance_mode=args.distance_mode,
+        legacy_spatial=args.legacy_spatial,
     )
 
     if sender.connect():

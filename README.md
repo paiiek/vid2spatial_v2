@@ -56,6 +56,21 @@ Video / Sketch
 > 60° assumption costs **3.81° AzMAE**, dropping to 0.41° with the true intrinsics.
 > See `reports/azimuth_kitti_2026-09-04.md`.
 
+### Render options added 2026-09-04 (all opt-in)
+
+Every one of these is **off by default**, so a default render is byte-identical
+to commit `09289ea` — pinned by `test/render_golden_09289ea.json` and checked by
+`TestDefaultRenderInvariance`.
+
+| option | default | what it does |
+|---|---|---|
+| `hrir_interp` | `"nearest"` | `"barycentric"` interpolates HRIRs over the 3 nearest SOFA directions, removing the 5° staircase |
+| `confidence_gate` | `False` | freeze azimuth and duck toward diffuse during lost tracker episodes |
+| `gain_mode="physical"` | n/a | inverse-distance direct gain, ISO 9613-1 air absorption, DRR coupled to distance |
+| `doppler` | `False` | pitch-shift by the radial velocity |
+| `motion_mode` | `"camera_frame"` | `"world_frame"` subtracts estimated camera yaw so a static source stays put during a pan |
+| `fov_from_metadata` | `False` | read the real field of view from container metadata instead of assuming 60° |
+
 ---
 
 ## Installation

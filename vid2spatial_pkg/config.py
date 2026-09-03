@@ -2,8 +2,7 @@
 Configuration classes for vid2spatial pipeline.
 """
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, List
-from pathlib import Path
+from typing import Optional, Tuple
 
 
 @dataclass
@@ -18,7 +17,10 @@ class CameraConfig:
     # the container (sidecar JSON / exiftool / ffprobe) and warns loudly when
     # it has to fall back. The value actually used and where it came from are
     # written into the trajectory JSON as intrinsics.fov_deg / fov_source.
-    fov_from_metadata: bool = True
+    # OFF by default: turning it on can change the FOV a clip renders with, and
+    # therefore every azimuth, so it is an explicit opt-in rather than a silent
+    # behaviour change on existing pipelines (2026-09-04 review, MEDIUM).
+    fov_from_metadata: bool = False
     fov_explicit: bool = False          # user passed --fov-deg: metadata is skipped
     focal_35mm: Optional[float] = None  # --focal-35mm, converted to a FOV
     fov_source: str = "default"         # filled in by the pipeline at run time

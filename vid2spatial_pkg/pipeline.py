@@ -181,6 +181,8 @@ class SpatialAudioPipeline:
             focal_35mm=cam.focal_35mm,
             default_fov_deg=cam.fov_deg,
             use_metadata=cam.fov_from_metadata,
+            # only shout about the fallback when we actually went looking
+            warn=cam.fov_from_metadata,
         )
         cam.fov_deg = float(info.fov_deg)
         cam.fov_source = info.source

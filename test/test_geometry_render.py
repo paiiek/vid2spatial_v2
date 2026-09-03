@@ -205,7 +205,8 @@ class TestCameraIntrinsics:
         cfg = CameraConfig()
         assert cfg.fov_deg == 60.0                    # default unchanged
         assert cfg.fov_source == "default"
-        assert cfg.fov_from_metadata is True
+        # opt-in: reading the container can change the FOV, hence every azimuth
+        assert cfg.fov_from_metadata is False
         assert cfg.focal_35mm is None
         assert cfg.motion_mode == "camera_frame"      # default unchanged
 
@@ -419,7 +420,10 @@ class TestHrirInterpolation:
                    render_binaural_from_trajectory):
             p = inspect.signature(fn).parameters
             assert "hrir_interp" in p
-            assert p["hrir_interp"].default == "barycentric"
+            # nearest is the DEFAULT: it is what every shipped stimulus was
+            # rendered with, so interpolation has to be opted into (HIGH 1 of
+            # the 2026-09-04 review). See TestDefaultRenderInvariance.
+            assert p["hrir_interp"].default == "nearest"
 
     def test_itd_staircase_measured_on_a_real_sofa(self):
         """The A8 acceptance measurement, on the real 5 deg KEMAR grid."""
@@ -517,13 +521,16 @@ class TestConfidenceAwareRender:
         assert np.allclose(duck, 1.0)
         assert np.allclose(diffuse, 0.0)
 
-    def test_confidence_gate_is_on_by_default_in_the_renderers(self):
+    def test_confidence_gate_is_off_by_default_in_the_renderers(self):
         import inspect
         from vid2spatial_pkg.foa_render import (
             render_foa_from_trajectory, render_binaural_from_trajectory)
         for fn in (render_foa_from_trajectory, render_binaural_from_trajectory):
             p = inspect.signature(fn).parameters
-            assert p["confidence_gate"].default is True
+            # OFF by default: trajectory_export.py writes a confidence field on
+            # every row, so an on-by-default gate would silently change real
+            # renders (HIGH 2 of the 2026-09-04 review).
+            assert p["confidence_gate"].default is False
             assert p["conf_threshold"].default == pytest.approx(0.5)
 
 
@@ -652,3 +659,69 @@ class TestDoppler:
             render_foa_from_trajectory, render_binaural_from_trajectory)
         for fn in (render_foa_from_trajectory, render_binaural_from_trajectory):
             assert inspect.signature(fn).parameters["doppler"].default is False
+
+
+# ---------------------------------------------------------------------------
+# Default-render invariance against the pre-change commit
+# ---------------------------------------------------------------------------
+class TestDefaultRenderInvariance:
+    """A default render must be byte-identical to commit 09289ea.
+
+    test_existing_modes_are_untouched only proves the code is deterministic,
+    which says nothing about whether it still agrees with what shipped. This
+    compares real rendered arrays against a golden built by running
+    test/make_render_golden.py inside a worktree checked out at 09289ea.
+    """
+
+    def _harness(self):
+        path = REPO_ROOT / "test" / "make_render_golden.py"
+        spec = importlib.util.spec_from_file_location("make_render_golden", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def test_golden_file_is_present_and_sane(self):
+        import json
+        golden = REPO_ROOT / "test" / "render_golden_09289ea.json"
+        assert golden.exists(), "golden reference missing"
+        data = json.loads(golden.read_text())
+        assert data["sections"], "golden has no sections"
+        # every mode that ships must be covered
+        for mode in ("depth_rel", "bbox_area", "bbox_area_log", "hybrid"):
+            assert f"prep::{mode}::audio" in data["sections"]
+        assert "foa::reverb=False" in data["sections"]
+        assert "foa::reverb=True" in data["sections"]
+
+    def test_default_render_matches_09289ea(self):
+        import json
+        mod = self._harness()
+        golden = REPO_ROOT / "test" / "render_golden_09289ea.json"
+        ref = json.loads(golden.read_text())
+        sofa = mod.find_sofa()
+        res = mod.build(sofa)
+        bad = mod.compare(ref, res, allow_missing=() if sofa else ("binaural",))
+        assert not bad, "default render drifted from 09289ea:\n  " + "\n  ".join(bad)
+
+    def test_the_golden_actually_detects_a_default_change(self):
+        """Guard the guard: flipping a default must make the check fail."""
+        import json
+        mod = self._harness()
+        ref = json.loads((REPO_ROOT / "test" / "render_golden_09289ea.json").read_text())
+        traj = mod.make_trajectory()
+        assert any(f["confidence"] < 0.5 for f in traj["frames"]), \
+            "the golden trajectory must contain a lost episode to be a real test"
+
+        import tempfile
+        import soundfile as sf
+        from vid2spatial_pkg.foa_render import _load_and_prepare
+        with tempfile.TemporaryDirectory() as td:
+            wav = str(Path(td) / "in.wav")
+            sf.write(wav, mod.make_audio(), mod.SR, subtype="FLOAT")
+            off, *_ = _load_and_prepare(wav, traj, confidence_gate=False)
+            on, *_ = _load_and_prepare(wav, traj, confidence_gate=True)
+        assert not np.array_equal(off, on), \
+            "the confidence gate must actually change this stimulus"
+        assert float(np.max(np.abs(off - on))) > 1e-3
+        # and the default is the one that matches the golden
+        assert ref["sections"]["prep::depth_rel::audio"]["abs_max"] == pytest.approx(
+            float(np.max(np.abs(off))), rel=1e-6)

@@ -46,8 +46,15 @@ Woodworth ITD inversion.
 | barycentric | 12.063° | 0.505° | 89.99° |
 
 The discrete jump shrinks 4.3× and the trajectory curvature 3.5×, with the swept
-range preserved. Default is now `barycentric`; `hrir_interp="nearest"` restores
-the old behaviour.
+range preserved.
+
+**`nearest` remains the default.** Interpolation is opt-in via
+`hrir_interp="barycentric"`. An earlier revision of this branch defaulted to
+`barycentric`, which changed every existing render: measured against commit
+`09289ea` the binaural output moved by up to 9.4e-2 absolute, which would have
+silently invalidated the listening-test stimuli in
+`test/render_listening_test_v3.py` and the demo renders. The default render path
+is now pinned by `test/render_golden_09289ea.json`.
 
 ## A14 — Doppler from the radial velocity
 
@@ -61,12 +68,18 @@ a receding source drops below 950 Hz, and a static source is unchanged within
 ## A16 — confidence-aware rendering during lost episodes
 
 `FAILURE_MODE_ANALYSIS.json` reports 55 lost episodes, 4.0 % of frames, with
-azimuth error 10.06° while lost against 0.757° while good. The renderer now
-freezes azimuth at the last confident value across a lost episode, ducks the
-direct path by 9 dB and pushes 0.35 of extra wetness toward the diffuse field,
-with 80 ms fades.
+azimuth error 10.06° while lost against 0.757° while good. With
+`confidence_gate=True` the renderer freezes azimuth at the last confident value
+across a lost episode, ducks the direct path by 9 dB and pushes 0.35 of extra
+wetness toward the diffuse field, with 80 ms fades.
 
 Verified in `TestConfidenceAwareRender`: across a synthetic 15-frame lost
 episode the rendered azimuth is exactly flat and the step into the episode falls
-from over 40° to zero. A trajectory with no `confidence` field is a strict no-op,
-so the gate is on by default without perturbing older trajectories.
+from over 40° to zero.
+
+**The gate is off by default.** An earlier revision of this branch enabled it,
+on the reasoning that a trajectory without a `confidence` field is a no-op. That
+reasoning was wrong in practice: `vid2spatial_pkg/trajectory_export.py` writes a
+`confidence` column on every row, so real trajectories do carry the field and an
+on-by-default gate moved a dipping trajectory by 3.7e-2 absolute against
+`09289ea`. Opt in per render.

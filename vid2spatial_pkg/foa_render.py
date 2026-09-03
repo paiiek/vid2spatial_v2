@@ -746,7 +746,7 @@ def _load_and_prepare(audio_path: str, trajectory: Dict, smooth_ms: float = 50.0
                       gain_mode: str = "depth_rel", metric_alpha: float = 0.5,
                       use_confidence_fade: bool = False, conf_fade_strength: float = 0.6,
                       d_rel_attack_s: float = 0.0, d_rel_release_s: float = 0.0,
-                      confidence_gate: bool = True,
+                      confidence_gate: bool = False,
                       conf_threshold: float = LOST_CONF_THRESHOLD,
                       lost_duck_db: float = LOST_DUCK_DB,
                       lost_diffuse_boost: float = LOST_DIFFUSE_BOOST,
@@ -868,7 +868,7 @@ def render_foa_from_trajectory(
     conf_fade_strength: float = 0.6,
     d_rel_attack_s: float = 0.0,
     d_rel_release_s: float = 0.0,
-    confidence_gate: bool = True,
+    confidence_gate: bool = False,
     conf_threshold: float = LOST_CONF_THRESHOLD,
     lost_duck_db: float = LOST_DUCK_DB,
     lost_diffuse_boost: float = LOST_DIFFUSE_BOOST,
@@ -940,7 +940,7 @@ def render_binaural_from_trajectory(
     apply_reverb: bool = False,
     rt60: float = 0.5,
     block_ms: float = 10.0,
-    hrir_interp: str = "barycentric",
+    hrir_interp: str = "nearest",
     use_learned_mapping: bool = False,
     learned_model_path: str = None,
     gain_mode: str = "depth_rel",
@@ -949,7 +949,7 @@ def render_binaural_from_trajectory(
     conf_fade_strength: float = 0.6,
     d_rel_attack_s: float = 0.0,
     d_rel_release_s: float = 0.0,
-    confidence_gate: bool = True,
+    confidence_gate: bool = False,
     conf_threshold: float = LOST_CONF_THRESHOLD,
     lost_duck_db: float = LOST_DUCK_DB,
     lost_diffuse_boost: float = LOST_DIFFUSE_BOOST,
@@ -1166,7 +1166,7 @@ def make_hrir_lookup(src_cart: np.ndarray, ir_data: np.ndarray,
 def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
                          el_s: np.ndarray, sofa_path: str,
                          block_ms: float = 50.0,
-                         hrir_interp: str = "barycentric") -> np.ndarray:
+                         hrir_interp: str = "nearest") -> np.ndarray:
     """Render mono to binaural using direct HRTF lookup per time block.
 
     Instead of FOA virtual-speaker decode (which washes out high-frequency
@@ -1269,7 +1269,7 @@ def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
 
 
 def foa_to_binaural_sofa(foa_sn3d: np.ndarray, sr: int, sofa_path: str,
-                         hrir_interp: str = "barycentric") -> np.ndarray:
+                         hrir_interp: str = "nearest") -> np.ndarray:
     """Decode FOA (AmbiX ACN/SN3D [W,Y,Z,X]) to binaural using SOFA HRTF.
 
     Uses direct HRIR convolution via h5py (no spaudiopy dependency).

@@ -43,11 +43,13 @@ now reports both mappings' MAE against the log-distance target.
 Tests: `test_bbox_area_log_mode_is_log_linear_in_distance`,
 `test_area_threshold_calibration_prefers_log_mapping_on_kitti`.
 
-**Not decided here (user call).** Whether `bbox_area_log` becomes the default
-for the listening-test "proposed" condition. It changes the rendered loudness
-curve of every clip (mid-range objects get louder/brighter), so it should go
-through an ear check before replacing `bbox_area` in
-`test/render_listening_test_v3.py`.
+**Decision (2026-09-04, user).** `bbox_area_log` is now the default for every
+user-facing render path: the listening-test "proposed" condition
+(`test/render_listening_test_v3.py`), the demo server (`test/demo/server.py`)
+and `test/run_baseline_compare.py`. Chosen on the two-set GT evidence below
+without a prior ear check; the library default `gain_mode="depth_rel"` and the
+`bbox_area` mode itself are unchanged, so old stimuli remain reproducible with
+`gain_mode="bbox_area"`.
 
 **Replication on an independent set (KITTI Object Detection, 15 545
 objects / 7 481 images, per-image so no tracks; `--format object`,

@@ -122,7 +122,7 @@ def render_baseline(mono: np.ndarray, trajectory: dict, tmp_wav: Path) -> np.nda
         str(tmp_wav), trajectory,
         smooth_ms=50.0,
         dist_gain_k=2.5, lpf_min=2000.0, lpf_max=8000.0,
-        gain_mode="bbox_area",
+        gain_mode="bbox_area_log",
     )
     stereo = render_stereo_pan_baseline(audio_proc, sr, az_s, dist_s, d_rel_s, apply_gain=False)
     # [2, T] → [T, 2]
@@ -143,7 +143,7 @@ def render_nodepth(mono: np.ndarray, trajectory: dict, tmp_wav: Path,
     T      = len(mono)
 
     az_s, el_s, dist_s, d_rel_s = interpolate_angles_distance(
-        frames, T, SR, fps=fps, gain_mode="bbox_area",
+        frames, T, SR, fps=fps, gain_mode="bbox_area_log",
     )
     az_s, el_s = smooth_limit_angles(az_s, el_s, SR, smooth_ms=50.0)
 
@@ -174,7 +174,7 @@ def render_proposed(mono: np.ndarray, trajectory: dict, tmp_wav: Path,
         dist_lpf_max_hz=8000.0,
         apply_reverb=False,
         block_ms=10.0,
-        gain_mode="bbox_area",
+        gain_mode="bbox_area_log",
     )
     audio, _ = sf.read(str(out_wav), dtype="float32")
     return rms_normalize(audio)

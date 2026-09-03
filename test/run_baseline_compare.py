@@ -64,7 +64,7 @@ CLIPS = {
 
 # A_tuned 공통 렌더 파라미터
 HRTF_PARAMS = dict(
-    gain_mode="bbox_area", metric_alpha=0.5,
+    gain_mode="bbox_area_log", metric_alpha=0.5,
     gain_k=1.5, gain_min=0.1, lpf_min=1200, lpf_max=8000,
     confidence_fade=False,
 )
@@ -145,7 +145,7 @@ def render_baseline_pan_lpf(audio_path, traj, out_path):
     img_h = int(intr.get("height", frames[0].get("height",  720)))
 
     az_s, el_s, dist_s, d_rel_s = interpolate_angles_distance(
-        frames, T, sr, fps=fps, gain_mode="bbox_area",
+        frames, T, sr, fps=fps, gain_mode="bbox_area_log",
         img_w=img_w, img_h=img_h)
 
     # Same gain/LPF as A_tuned

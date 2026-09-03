@@ -567,7 +567,6 @@ def test_ten_metre_trajectory_arrives_as_adm_dist_one(dist_m, want_adm):
 
 def test_legacy_spatial_reaches_the_cli():
     """--legacy-spatial must exist, default off, and feed OSCConfig."""
-    import argparse
     import inspect
     from vid2spatial_pkg import osc_sender as m
     src = inspect.getsource(m.main)

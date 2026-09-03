@@ -158,8 +158,21 @@ def extract(bridge: Path) -> dict:
 
     # -- handlers ---------------------------------------------------------------
     start_body, _ = _func(src, "start", cls="BridgeServer")
+    # The address map lives in BridgeServer.build_dispatcher() on newer
+    # bridges (engine lane fix/lane-bridge-handoff, 2026-09-02) and inline
+    # in start() on older ones. Parse whichever holds the disp.map calls.
+    map_body = start_body
+    if not _RE_MAP.search(start_body):
+        try:
+            map_body, _ = _func(src, "build_dispatcher", cls="BridgeServer")
+        except ValueError:
+            pass
+    # Newer bridges route the /spatial metres->normalised law through
+    # OscTranslator.dist_m_to_v2s() with a class constant DISTANCE_MAX_M.
+    cm = re.search(r'^\s*DISTANCE_MAX_M\s*(?::\s*float)?\s*=\s*([\d.]+)', src, re.M)
+    class_dist_max = float(cm.group(1)) if cm else None
     handlers = {}
-    for addr, hname in _RE_MAP.findall(start_body):
+    for addr, hname in _RE_MAP.findall(map_body):
         hbody, hln = _func(src, hname, cls="BridgeServer")
         h = {"handler": hname, "source": f"{rel}:{hln}"}
         a0 = _RE_ARGS0.search(hbody)
@@ -181,10 +194,16 @@ def extract(bridge: Path) -> dict:
             h["dist_norm_expr"] = sn.group(1)
             mm = re.search(r'/\s*([\d.]+)', sn.group(1))
             h["dist_max_m"] = float(mm.group(1)) if mm else None
+        elif "dist_m_to_v2s(" in hbody and class_dist_max is not None:
+            # Same semantic law, expressed via the shared constant; record it in
+            # the canonical inline form so old/new bridges compare equal when
+            # the constant is equal and DRIFT when it is not.
+            h["dist_norm_expr"] = f"max(0.0, min(1.0, 1.0 - dist_m / {class_dist_max}))"
+            h["dist_max_m"] = class_dist_max
         handlers[addr] = h
     if not handlers:
         raise ValueError("no disp.map handlers found")
-    fallback = "set_default_handler" in start_body
+    fallback = "set_default_handler" in map_body
 
     # -- flush / output ------------------------------------------------------------
     fbody, fln = _func(src, "_flush", cls="BridgeServer")

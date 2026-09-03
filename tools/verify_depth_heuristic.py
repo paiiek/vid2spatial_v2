@@ -63,6 +63,13 @@ def bbox_area_d_rel(area_frac: np.ndarray) -> np.ndarray:
     return 1.0 - area_norm
 
 
+def bbox_area_log_d_rel(area_frac: np.ndarray) -> np.ndarray:
+    """foa_render gain_mode='bbox_area_log' mapping (KITTI-calibrated shape, same thresholds)."""
+    la = np.log(np.maximum(area_frac, 1e-12))
+    area_norm = np.clip((la - np.log(AREA_FAR)) / (np.log(AREA_NEAR) - np.log(AREA_FAR)), 0.0, 1.0)
+    return 1.0 - area_norm
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Synthetic checks
 # ─────────────────────────────────────────────────────────────────────────────
@@ -248,6 +255,15 @@ def evaluate_against_gt(gt_path: Path) -> Dict:
             for rs in groups.values()])
         report["bbox_area_drel_spearman"] = _spearman(d_rel_all, gt_all)
         report["bbox_area_drel_saturated_frac"] = float(np.mean((d_rel_all <= 0.0) | (d_rel_all >= 1.0)))
+        # log-area variant (same thresholds): fit to a log-distance target, GT p5..p95
+        d_log_all = np.concatenate([
+            bbox_area_log_d_rel(np.array([float(r["area"]) for r in rs]) / np.array([float(r["frame_area"]) for r in rs]))
+            for rs in groups.values()])
+        z5, z95 = np.percentile(gt_all, 5), np.percentile(gt_all, 95)
+        tgt = np.clip((np.log(gt_all) - np.log(z5)) / (np.log(z95) - np.log(z5)), 0.0, 1.0)
+        report["bbox_area_drel_mae_vs_logdist_target"] = float(np.mean(np.abs(d_rel_all - tgt)))
+        report["bbox_area_log_drel_mae_vs_logdist_target"] = float(np.mean(np.abs(d_log_all - tgt)))
+        report["bbox_area_log_drel_saturated_frac"] = float(np.mean((d_log_all <= 0.0) | (d_log_all >= 1.0)))
     # by object class
     by_type: Dict[str, List[str]] = {}
     for name, m in per_track.items():

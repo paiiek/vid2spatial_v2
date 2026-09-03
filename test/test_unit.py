@@ -838,6 +838,56 @@ class TestDepthHeuristicVerification(unittest.TestCase):
         self.assertGreater(res["spearman"], 0.95)      # measured 0.982
         self.assertIn("bbox_area_drel_spearman", res)
 
+    def test_bbox_area_log_mode_is_log_linear_in_distance(self):
+        """gain_mode='bbox_area_log': same AREA_NEAR/AREA_FAR endpoints as 'bbox_area'
+        (d_rel 0 at 8 % of frame, 1 at 0.1 %) but linear in log(area), i.e. linear in
+        log z under a pinhole camera. KITTI-GT calibration (2026-09-03) picked this
+        shape: MAE vs log-distance target 0.309 → 0.116 at unchanged saturation."""
+        from vid2spatial_pkg.foa_render import interpolate_angles_distance
+        W, H = 1000, 1000
+        sr, fps = 8000, 10.0
+        def d_rel_for(area_frac):
+            side = math.sqrt(area_frac * W * H)
+            frames = [{"frame": i, "az": 0.0, "el": 0.0, "dist_m": 1.0, "w": side, "h": side}
+                      for i in range(20)]
+            _, _, _, d = interpolate_angles_distance(frames, 2.0, sr, fps=fps, gain_mode="bbox_area_log",
+                                                     img_w=W, img_h=H, d_rel_attack_s=0.0, d_rel_release_s=0.0)
+            return float(np.median(d))
+        self.assertAlmostEqual(d_rel_for(0.08), 0.0, places=3)
+        self.assertAlmostEqual(d_rel_for(0.001), 1.0, places=3)
+        self.assertAlmostEqual(d_rel_for(0.2), 0.0, places=3)      # saturates near
+        self.assertAlmostEqual(d_rel_for(1e-5), 1.0, places=3)     # saturates far
+        # geometric midpoint of the thresholds → d_rel = 0.5 (log-linear), not ~0.03 (linear)
+        mid = math.sqrt(0.08 * 0.001)
+        self.assertAlmostEqual(d_rel_for(mid), 0.5, places=2)
+        # doubling z quarters the area → equal d_rel steps in log z
+        z = np.array([2.0, 4.0, 8.0, 16.0])
+        d = np.array([d_rel_for(0.08 * (2.0 / zz) ** 2) for zz in z])
+        self.assertTrue(np.all(np.diff(d) > 0))
+        np.testing.assert_allclose(np.diff(d), np.diff(d)[0], atol=0.02)
+
+    def test_area_threshold_calibration_prefers_log_mapping_on_kitti(self):
+        """tools/calibrate_area_thresholds.py on the shipped KITTI GT: the log-area mapping
+        with the shipping thresholds must beat the linear mapping on the log-distance target
+        without raising saturation past 15 % (measured: 0.116 vs 0.309, sat 0.089 vs 0.083)."""
+        import importlib.util
+        repo = Path(__file__).parent.parent
+        p = repo / "tools" / "calibrate_area_thresholds.py"
+        spec = importlib.util.spec_from_file_location("calibrate_area_thresholds", p)
+        cal = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cal)
+        import json
+        recs = json.loads((repo / "test/full_eval/depth_gt.json").read_text())
+        a = np.array([r["area"] / r["frame_area"] for r in recs])
+        z = np.array([r["depth_m"] for r in recs])
+        z_near, z_far = np.percentile(z, 5), np.percentile(z, 95)
+        target = np.clip((np.log(z) - np.log(z_near)) / (np.log(z_far) - np.log(z_near)), 0, 1)
+        lin = cal.score(cal.d_rel_linear(a, cal.CUR_NEAR, cal.CUR_FAR), target, z)
+        log = cal.score(cal.d_rel_log(a, cal.CUR_NEAR, cal.CUR_FAR), target, z)
+        self.assertLess(log["mae"], lin["mae"] * 0.5)
+        self.assertLess(log["sat_frac"], 0.15)
+        self.assertGreater(log["spearman"], 0.85)
+
     def test_missing_ground_truth_is_reported_not_fabricated(self):
         """With no GT file anywhere, find_gt must return None (script then reports it)."""
         import tempfile

@@ -110,6 +110,8 @@ def interpolate_angles_distance(frames: List[Dict], T: int, sr: int,
                        "depth_rel"   – current default: per-clip normalised dist_m (baseline)
                        "bbox_area"   – (A) bbox area / frame area → 0=tiny/far, 1=full-frame/near
                                        d_rel = 1 - area_rel  so near(big)=0 → loud, far(small)=1 → quiet
+                       "bbox_area_log" – (A-log) same thresholds, linear in log(area) so d_rel is
+                                       linear in log-distance (area ∝ 1/z²). KITTI-GT calibrated.
                        "hybrid"      – (B) metric_alpha * depth_metric + (1-alpha) * bbox
                                        depth component uses absolute dist_m (Metric3D-style),
                                        clipped to [0.5, 20]m then inverted log-scale.
@@ -153,12 +155,19 @@ def interpolate_angles_distance(frames: List[Dict], T: int, sr: int,
     # ── d_rel computation by gain_mode ────────────────────────────────────────
     frame_area = float(img_w * img_h)
 
-    if gain_mode == "bbox_area":
+    if gain_mode in ("bbox_area", "bbox_area_log"):
         # (A) bbox area → d_rel using absolute thresholds (not per-clip normalize).
         # Per-clip normalize was causing bbox variation to always map to full [0,1]
         # regardless of absolute object size, killing perceptual distance effect.
         #   area >= AREA_NEAR (8% of frame)  → d_rel=0 → loud + bright
         #   area <= AREA_FAR  (0.1% of frame) → d_rel=1 → quiet + dark
+        # "bbox_area"     : linear in area fraction (original, chosen by eye).
+        # "bbox_area_log" : linear in log(area). Since area ∝ 1/z², log-area is
+        #   linear in log z — the same log-distance shape "hybrid" uses. On the
+        #   KITTI depth GT (tools/calibrate_area_thresholds.py, 2026-09-03) the
+        #   same thresholds give MAE vs log-distance target 0.309 → 0.116 with
+        #   unchanged saturation (~9 %); the linear form pushes most 4–16 m
+        #   objects to d_rel 0.4–0.7 (too far).
         AREA_NEAR = 0.08   # 8% of frame → "near" (loud, bright)
         AREA_FAR  = 0.001  # 0.1% of frame → "far"  (quiet, dark)
         def _bbox_area(f):
@@ -170,7 +179,11 @@ def interpolate_angles_distance(frames: List[Dict], T: int, sr: int,
         if smooth_samples > 1:
             from scipy.ndimage import uniform_filter1d
             area_s = uniform_filter1d(area_s, size=smooth_samples, mode='nearest').astype(np.float32)
-        area_norm = np.clip((area_s - AREA_FAR) / (AREA_NEAR - AREA_FAR), 0.0, 1.0)
+        if gain_mode == "bbox_area_log":
+            la = np.log(np.maximum(area_s, 1e-12))
+            area_norm = np.clip((la - math.log(AREA_FAR)) / (math.log(AREA_NEAR) - math.log(AREA_FAR)), 0.0, 1.0)
+        else:
+            area_norm = np.clip((area_s - AREA_FAR) / (AREA_NEAR - AREA_FAR), 0.0, 1.0)
         d_rel_s = 1.0 - area_norm   # large area → d_rel=0 → loud
 
     elif gain_mode == "hybrid":
@@ -519,7 +532,7 @@ def _load_and_prepare(audio_path: str, trajectory: Dict, smooth_ms: float = 50.0
                       d_rel_attack_s: float = 0.0, d_rel_release_s: float = 0.0):
     """Shared prep for FOA and binaural renderers: load audio, interpolate trajectory, apply distance FX.
 
-    gain_mode: "depth_rel" (baseline), "bbox_area" (A), "hybrid" (B)
+    gain_mode: "depth_rel" (baseline), "bbox_area" (A), "bbox_area_log" (A-log), "hybrid" (B)
     metric_alpha: blend weight for depth component in "hybrid" mode.
     use_confidence_fade: fade out when tracker confidence is low (off-screen handling).
     conf_fade_strength: max d_rel increase at conf=0 (0.6 recommended).
@@ -573,7 +586,7 @@ def render_foa_from_trajectory(
 ) -> Dict:
     """Render mono audio to FOA (4-channel AmbiX) using trajectory.
 
-    gain_mode: "depth_rel" (baseline) | "bbox_area" (A) | "hybrid" (B)
+    gain_mode: "depth_rel" (baseline) | "bbox_area" (A) | "bbox_area_log" (A-log) | "hybrid" (B)
     use_confidence_fade: fade out when tracker confidence is low (off-screen).
     This produces the FOA output only.  For binaural headphone output,
     use render_binaural_from_trajectory() instead.
@@ -635,7 +648,7 @@ def render_binaural_from_trajectory(
 ) -> Dict:
     """Render mono audio to HRTF binaural stereo using trajectory.
 
-    gain_mode: "depth_rel" (baseline) | "bbox_area" (A) | "hybrid" (B)
+    gain_mode: "depth_rel" (baseline) | "bbox_area" (A) | "bbox_area_log" (A-log) | "hybrid" (B)
     use_confidence_fade: fade out when tracker confidence is low (off-screen).
     block_ms: HRTF update interval — 10ms (default) balances smoothness vs cost.
               50ms caused ~1.5-frame lag on 30fps video; 10ms is perceptually tight.

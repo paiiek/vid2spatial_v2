@@ -227,8 +227,12 @@ def encode_multi_source_foa(
 
         T = len(audio)
 
-        # Interpolate trajectory to audio timeline
-        az_s, el_s, dist_s, _d_rel_s = interpolate_angles_distance(traj["frames"], T=T, sr=sr)
+        # Interpolate trajectory to audio timeline.
+        # fps MUST come from the trajectory: defaulting to 30 gives a 25 fps clip
+        # a 20% wrong time base (same defect fixed earlier in trajectory_export).
+        fps = float(traj.get("fps", traj.get("intrinsics", {}).get("fps", 30.0)))
+        az_s, el_s, dist_s, _d_rel_s = interpolate_angles_distance(
+            traj["frames"], T=T, sr=sr, fps=fps)
 
         # Apply distance-based gain (inverse square law)
         # Reference distance: 1m
@@ -236,8 +240,11 @@ def encode_multi_source_foa(
         gain = ref_dist / np.clip(dist_s, 0.3, 50.0)
         audio_with_distance = audio * gain
 
-        # Encode to FOA
-        foa = encode_mono_to_foa(audio_with_distance, az_s, el_s)
+        # Encode to FOA.  Pipeline azimuth is right-positive; AmbiX is
+        # left-positive, so it must be negated exactly as
+        # render_foa_from_trajectory does.  Without this the multi-source mix
+        # came out mirrored left/right against the single-source renderer.
+        foa = encode_mono_to_foa(audio_with_distance, -az_s, el_s)
 
         # Mix into combined FOA
         foa_mixed[:, :T] += foa

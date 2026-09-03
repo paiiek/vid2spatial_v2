@@ -11,6 +11,7 @@ import sys
 import math
 import unittest
 import numpy as np
+import pytest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -1134,3 +1135,44 @@ class TestReadmeQuickStartMatchesCode:
         readme = (Path(__file__).parent.parent / "README.md").read_text()
         for phantom in ("tracker.run()", "traj.save(", "bbox_init=", "az_rad="):
             assert phantom not in readme, f"README still shows {phantom}"
+
+
+class TestMultiSourceFoa:
+    """multi_source.py is listed in the README as a shipped feature but had no
+    caller and no test.  Two defects were hiding there: fps was hardcoded to 30
+    (the trajectory_export defect again) and the AmbiX azimuth negation that
+    render_foa_from_trajectory applies was missing, mirroring the mix L/R."""
+
+    @staticmethod
+    def _traj(fps, az):
+        return {"fps": fps, "frames": [{"frame": i, "az": az, "el": 0.0, "dist_m": 1.0}
+                                       for i in range(50)]}
+
+    def test_matches_single_source_channel_signs(self):
+        from vid2spatial_pkg.multi_source import encode_multi_source_foa
+        from vid2spatial_pkg.foa_render import encode_mono_to_foa
+        sr, T = 48000, 24000
+        audio = np.ones(T, dtype=np.float32)
+        az = 1.2  # right of image
+        mine = encode_multi_source_foa([audio], [self._traj(30.0, az)], sr=sr)
+        ref = encode_mono_to_foa(audio, np.full(T, -az, np.float32),
+                                 np.zeros(T, np.float32))
+        # W and Y (index 0 and 1 in ACN) must agree in sign with the reference.
+        for ch in (0, 1):
+            assert np.sign(np.mean(mine[ch])) == np.sign(np.mean(ref[ch])), \
+                f"channel {ch} sign differs from the single-source renderer"
+
+    def test_honours_trajectory_fps(self):
+        from vid2spatial_pkg.multi_source import encode_multi_source_foa
+        sr, T = 48000, 48000
+        audio = np.ones(T, dtype=np.float32)
+        moving = {"fps": 25.0, "frames": [{"frame": i, "az": -1.0 + 2.0 * i / 49,
+                                           "el": 0.0, "dist_m": 1.0} for i in range(50)]}
+        at25 = encode_multi_source_foa([audio], [moving], sr=sr)
+        at30 = encode_multi_source_foa([audio], [dict(moving, fps=30.0)], sr=sr)
+        assert not np.allclose(at25, at30), "trajectory fps is being ignored"
+
+    def test_length_mismatch_raises(self):
+        from vid2spatial_pkg.multi_source import encode_multi_source_foa
+        with pytest.raises(ValueError):
+            encode_multi_source_foa([np.zeros(100, np.float32)], [])

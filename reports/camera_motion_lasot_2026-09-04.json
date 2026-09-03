@@ -1,0 +1,65 @@
+[
+  {
+    "clip": "car-5",
+    "n_frames": 200,
+    "total_yaw_deg": -0.6377437074602397,
+    "peak_abs_yaw_deg": 1.006007583599894,
+    "total_pitch_deg": -1.4344768408687625,
+    "median_inliers": 257,
+    "ms_per_frame": 11.859503984451294
+  },
+  {
+    "clip": "motorcycle-1",
+    "n_frames": 200,
+    "total_yaw_deg": 2.77054910624639,
+    "peak_abs_yaw_deg": 25.678704964067094,
+    "total_pitch_deg": 1.9724343110121194,
+    "median_inliers": 547,
+    "ms_per_frame": 11.653163433074951
+  },
+  {
+    "clip": "drone-2",
+    "n_frames": 200,
+    "total_yaw_deg": -15.222915966323685,
+    "peak_abs_yaw_deg": 15.222915966323685,
+    "total_pitch_deg": 24.17103827131622,
+    "median_inliers": 139,
+    "ms_per_frame": 12.520464658737183
+  },
+  {
+    "clip": "horse-1",
+    "n_frames": 200,
+    "total_yaw_deg": -64.35072731556068,
+    "peak_abs_yaw_deg": 64.35072731556068,
+    "total_pitch_deg": -235.96902171109127,
+    "median_inliers": 126,
+    "ms_per_frame": 10.994093418121338
+  },
+  {
+    "clip": "skateboard-8",
+    "n_frames": 200,
+    "total_yaw_deg": 18.25311987590263,
+    "peak_abs_yaw_deg": 18.25311987590263,
+    "total_pitch_deg": -1.4570633647329068,
+    "median_inliers": 449,
+    "ms_per_frame": 11.974177360534668
+  },
+  {
+    "clip": "train-16",
+    "n_frames": 200,
+    "total_yaw_deg": -91.82975834418833,
+    "peak_abs_yaw_deg": 91.82975834418833,
+    "total_pitch_deg": -13.39309853757184,
+    "median_inliers": 271,
+    "ms_per_frame": 12.956547737121582
+  },
+  {
+    "clip": "guitar-9",
+    "n_frames": 200,
+    "total_yaw_deg": -2.583551744803549,
+    "peak_abs_yaw_deg": 2.864373012016032,
+    "total_pitch_deg": -2.4062786193130017,
+    "median_inliers": 259,
+    "ms_per_frame": 11.436527967453003
+  }
+]

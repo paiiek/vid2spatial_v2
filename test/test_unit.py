@@ -824,10 +824,42 @@ class TestDepthHeuristicVerification(unittest.TestCase):
         proxy = compute_bbox_scale_proxy(areas.tolist(), initial_depth_m=1.0)
         np.testing.assert_allclose(proxy, z, rtol=1e-5)
 
-    def test_no_ground_truth_in_repo_is_reported(self):
-        """Repo has no metric depth GT → script must say so, not fabricate a metric."""
+    def test_kitti_ground_truth_is_found_and_sane(self):
+        """Since 2026-09-03 the repo ships test/full_eval/depth_gt.json (KITTI Tracking).
+        It must be auto-discovered, multi-track, and score the proxy in the measured band."""
         repo = Path(__file__).parent.parent
-        self.assertIsNone(self.mod.find_gt(None, repo))
+        gt = self.mod.find_gt(None, repo)
+        self.assertIsNotNone(gt)
+        res = self.mod.evaluate_against_gt(gt)
+        self.assertGreater(res["n_tracks"], 100)
+        self.assertGreater(res["n"], 10000)
+        self.assertLess(res["abs_rel"], 0.15)          # measured 0.110
+        self.assertGreater(res["delta1"], 0.80)        # measured 0.852
+        self.assertGreater(res["spearman"], 0.95)      # measured 0.982
+        self.assertIn("bbox_area_drel_spearman", res)
+
+    def test_missing_ground_truth_is_reported_not_fabricated(self):
+        """With no GT file anywhere, find_gt must return None (script then reports it)."""
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNone(self.mod.find_gt(None, Path(d)))
+            self.assertIsNone(self.mod.find_gt(str(Path(d) / "nope.json"), Path(d)))
+
+    def test_gt_per_track_calibration(self):
+        """Two tracks with different z0 must each be calibrated on their own first record."""
+        import json
+        import tempfile
+        z = np.linspace(2.0, 6.0, 8)
+        recs = []
+        for name, size in (("a", 0.4), ("b", 1.6)):   # different object sizes → different areas
+            for a, zz in zip(self.mod.pinhole_area(z, size_m=size), z):
+                recs.append({"track": name, "area": float(a), "frame_area": 1.0e6, "depth_m": float(zz)})
+        with tempfile.TemporaryDirectory() as d:
+            gt = Path(d) / "gt.json"
+            gt.write_text(json.dumps(recs))
+            res = self.mod.evaluate_against_gt(gt)
+        self.assertEqual(res["n_tracks"], 2)
+        self.assertLess(res["mae_m"], 1e-3)   # single-track calibration would fail this badly
 
     def test_gt_metric_path_with_synthetic_file(self):
         import json

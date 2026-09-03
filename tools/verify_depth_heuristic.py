@@ -13,11 +13,13 @@ when the calibration depth is exact, and both must be monotone (larger bbox →
 nearer). Nothing here needs a model, a GPU, or a video.
 
 Ground truth: run with --gt <json> where the file is a list of
-{"area": <px^2 or frac>, "depth_m": <m>} (optionally "frame_area") to get
-MAE / AbsRel / Spearman of the proxy against it. As of 2026-09-02 the repo
-contains NO metric-depth ground truth (LaSOT = bboxes only, FairPlay/TAU =
-audio), so without --gt this script reports that fact and runs synthetic
-checks only.
+{"area": <px^2>, "depth_m": <m>} (optionally "track", "frame_area", "type")
+to get MAE / AbsRel / delta1 / Spearman of the proxy against it, calibrated
+per track on its first record. Since 2026-09-03 the repo ships
+test/full_eval/depth_gt.json built from the public KITTI Tracking labels by
+tools/build_depth_gt_kitti.py (2D bbox + camera-frame z per object per
+frame), so the default run evaluates against real metric depth. LaSOT
+(bboxes only) and FairPlay/TAU (audio) still carry no depth GT.
 
 Usage:
     python tools/verify_depth_heuristic.py [--gt gt.json] [--json out.json]
@@ -165,22 +167,99 @@ def find_gt(explicit: Optional[str], repo: Path) -> Optional[Path]:
     return None
 
 
-def evaluate_against_gt(gt_path: Path) -> Dict:
-    """GT = list of {"area": px^2, "depth_m": m}. Proxy calibrated on record 0."""
-    recs: List[Dict] = json.loads(gt_path.read_text())
-    if not recs:
-        return {"n": 0, "note": "GT file empty"}
-    areas = [float(r["area"]) for r in recs]
-    gt = np.array([float(r["depth_m"]) for r in recs])
+def _track_metrics(areas: List[float], gt: np.ndarray, frame_areas: Optional[List[float]]) -> Dict:
+    """Heuristic (1) calibrated on the track's first record; (2) from area fraction."""
     proxy = np.array(compute_bbox_scale_proxy(areas, initial_depth_m=float(gt[0])))
     err = np.abs(proxy - gt)
-    return {
+    out = {
         "n": int(len(gt)),
         "mae_m": float(err.mean()),
         "abs_rel": float(np.mean(err / np.maximum(gt, 1e-6))),
-        "spearman": _spearman(proxy, gt),
+        "spearman_scale_proxy": _spearman(proxy, gt),
+        "gt_depth_range_m": [float(gt.min()), float(gt.max())],
+    }
+    if frame_areas is not None:
+        frac = np.array(areas) / np.array(frame_areas)
+        d_rel = bbox_area_d_rel(frac)
+        # d_rel is 0 near / 1 far, so it should rank WITH depth.
+        out["spearman_bbox_area_drel"] = _spearman(d_rel, gt)
+        out["drel_saturated_frac"] = float(np.mean((d_rel <= 0.0) | (d_rel >= 1.0)))
+    return out
+
+
+def evaluate_against_gt(gt_path: Path) -> Dict:
+    """GT = list of {"area": px^2, "depth_m": m, ["track": str], ["frame_area": px^2]}.
+
+    Without "track" the whole file is one track calibrated on record 0
+    (legacy shape). With "track" each track is calibrated on ITS first
+    record and the per-record errors are pooled; per-track medians are
+    reported too so one long track cannot dominate.
+    """
+    recs: List[Dict] = json.loads(gt_path.read_text())
+    if not recs:
+        return {"n": 0, "note": "GT file empty"}
+    has_frame_area = all("frame_area" in r for r in recs)
+    groups: Dict[str, List[Dict]] = {}
+    for r in recs:
+        groups.setdefault(str(r.get("track", "_single")), []).append(r)
+
+    per_track: Dict[str, Dict] = {}
+    pooled_err: List[np.ndarray] = []
+    pooled_gt: List[np.ndarray] = []
+    pooled_proxy: List[np.ndarray] = []
+    for name, rs in groups.items():
+        areas = [float(r["area"]) for r in rs]
+        gt = np.array([float(r["depth_m"]) for r in rs])
+        fa = [float(r["frame_area"]) for r in rs] if has_frame_area else None
+        m = _track_metrics(areas, gt, fa)
+        m["type"] = rs[0].get("type")
+        per_track[name] = m
+        proxy = np.array(compute_bbox_scale_proxy(areas, initial_depth_m=float(gt[0])))
+        pooled_err.append(np.abs(proxy - gt))
+        pooled_gt.append(gt)
+        pooled_proxy.append(proxy)
+
+    err = np.concatenate(pooled_err)
+    gt_all = np.concatenate(pooled_gt)
+    proxy_all = np.concatenate(pooled_proxy)
+    abs_rel = err / np.maximum(gt_all, 1e-6)
+    tr_mae = np.array([m["mae_m"] for m in per_track.values()])
+    tr_rel = np.array([m["abs_rel"] for m in per_track.values()])
+    tr_sp = np.array([m["spearman_scale_proxy"] for m in per_track.values()])
+    tr_sp = tr_sp[~np.isnan(tr_sp)]
+    report = {
+        "n": int(len(gt_all)),
+        "n_tracks": len(per_track),
+        # pooled = every record weighted equally
+        "mae_m": float(err.mean()),
+        "abs_rel": float(abs_rel.mean()),
+        "delta1": float(np.mean(np.maximum(proxy_all / gt_all, gt_all / proxy_all) < 1.25)),
+        "spearman": _spearman(proxy_all, gt_all),
+        # per-track = every track weighted equally
+        "track_median_mae_m": float(np.median(tr_mae)),
+        "track_median_abs_rel": float(np.median(tr_rel)),
+        "track_median_spearman": float(np.median(tr_sp)) if len(tr_sp) else float("nan"),
+        "track_frac_spearman_gt_0_5": float(np.mean(tr_sp > 0.5)) if len(tr_sp) else float("nan"),
         "gt_file": str(gt_path),
     }
+    if has_frame_area:
+        d_rel_all = np.concatenate([
+            bbox_area_d_rel(np.array([float(r["area"]) for r in rs]) / np.array([float(r["frame_area"]) for r in rs]))
+            for rs in groups.values()])
+        report["bbox_area_drel_spearman"] = _spearman(d_rel_all, gt_all)
+        report["bbox_area_drel_saturated_frac"] = float(np.mean((d_rel_all <= 0.0) | (d_rel_all >= 1.0)))
+    # by object class
+    by_type: Dict[str, List[str]] = {}
+    for name, m in per_track.items():
+        by_type.setdefault(str(m["type"]), []).append(name)
+    report["by_type"] = {
+        t: {"n_tracks": len(names),
+            "median_abs_rel": float(np.median([per_track[n]["abs_rel"] for n in names])),
+            "median_spearman": float(np.nanmedian([per_track[n]["spearman_scale_proxy"] for n in names]))}
+        for t, names in sorted(by_type.items())
+    }
+    report["per_track"] = per_track
+    return report
 
 
 def main(argv=None) -> int:
@@ -209,14 +288,22 @@ def main(argv=None) -> int:
         print("\nground truth: NONE FOUND — " + report["ground_truth"]["note"])
     else:
         report["ground_truth"] = {"available": True, **evaluate_against_gt(gt_path)}
-        print(f"\nground truth: {report['ground_truth']}")
+        summary = {k: v for k, v in report["ground_truth"].items() if k != "per_track"}
+        print(f"\nground truth: {json.dumps(summary, indent=2)}")
 
     if a.json:
         Path(a.json).write_text(json.dumps(report, indent=2))
         print(f"report → {a.json}")
-    print("\nRESULT:", "SYNTHETIC CONSISTENCY CHECKS PASS (not a metric-accuracy validation; "
-          "the pinhole model is the heuristic's own inverse — supply --gt for real error)"
-          if all_pass else "SYNTHETIC CHECK FAILED")
+    if not all_pass:
+        verdict = "SYNTHETIC CHECK FAILED"
+    elif gt_path is None:
+        verdict = ("SYNTHETIC CONSISTENCY CHECKS PASS (not a metric-accuracy validation; "
+                   "the pinhole model is the heuristic's own inverse — supply --gt for real error)")
+    else:
+        g = report["ground_truth"]
+        verdict = (f"SYNTHETIC PASS + METRIC GT: AbsRel {g['abs_rel']:.3f}, delta1 {g['delta1']:.3f}, "
+                   f"Spearman {g['spearman']:.3f} over {g['n']} records / {g['n_tracks']} tracks")
+    print("\nRESULT:", verdict)
     return 0 if all_pass else 1
 
 

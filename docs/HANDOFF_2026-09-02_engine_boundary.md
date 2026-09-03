@@ -10,7 +10,7 @@ test/demo/index.html which these branches also touch), so NOTHING was merged the
      `OutputConfig.automation_path`, pipeline hook. Engine has NO per-object trajectory loader
      (proto `core/src/scene/TimelineJson.cpp` = scene keyframes only) → interchange format.
    - `tools/verify_depth_heuristic.py` — deterministic checks of the bbox-area depth heuristics.
-     **No metric depth ground truth exists in this repo**; absolute depth accuracy is unverified.
+     ~~No metric depth ground truth exists in this repo~~ **RESOLVED 2026-09-03:** `test/full_eval/depth_gt.json` (KITTI Tracking labels, 18,993 records / 294 tracks) — bbox-scale proxy AbsRel 0.110, δ1 0.852, Spearman 0.982; see `test/full_eval/DEPTH_GT_KITTI_RESULTS.md`.
    - demo OSC port 9001 → 9000 (`osc_sender.DEFAULT_OSC_PORT` single source of truth),
      new "vid2spatial" demo format that the bridge actually understands. server.py is CRLF — keep it.
 2. `feat/bridge-contract` (on top of 1; head moves as review fixes land — use the branch name)
@@ -34,5 +34,5 @@ git worktree remove /home/seung/mmhoa/vid2spatial_v2-wt-contract
 - ADR `/vid2spatial/obj/{N}/azim` family unimplemented in the bridge.
 
 ## Open items in THIS repo (future)
-- Supply a depth GT file (`[{area, depth_m}]`) and run `tools/verify_depth_heuristic.py --gt` to get MAE/AbsRel.
+- ~~Supply a depth GT file~~ DONE 2026-09-03: `python tools/build_depth_gt_kitti.py` (needs `data/kitti_tracking/label_02`, 2.2 MB public zip) → `tools/verify_depth_heuristic.py` picks it up by default.
 - ruff baseline: 258 pre-existing errors outside the new files.

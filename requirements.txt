@@ -2,6 +2,7 @@
 numpy>=1.21.0
 scipy>=1.7.0
 soundfile>=0.11.0
+h5py>=3.6.0          # SOFA/HRIR reading — required by every binaural render path
 librosa>=0.9.0
 opencv-python>=4.5.0
 torch>=2.0.0
@@ -13,9 +14,19 @@ timm>=0.9.0
 # Audio processing
 resampy>=0.4.0
 
+# Tracking / smoothing
+filterpy>=1.4.5      # KalmanFilter in temporal_smoother.py (top-level import)
+
+# OSC bridge + contract gate (make test runs test_bridge_contract.py)
+python-osc>=1.8.0
+PyYAML>=6.0
+
 # Evaluation
 tqdm>=4.65.0
 matplotlib>=3.5.0
+
+# Optional: FOA decoding (pure-NumPy fallback exists in foa_render.py)
+# spaudiopy>=0.1.5
 
 # Optional: Room acoustics
 # pyroomacoustics>=0.7.0  # Requires C++ compiler
@@ -23,6 +34,10 @@ matplotlib>=3.5.0
 # Optional: Advanced tracking
 # ultralytics>=8.0.0  # For YOLO
 # lap>=0.4.0  # For ByteTrack
+
+# Optional: Pose / open-vocabulary tracking
+# mediapipe>=0.10.0        # skeleton_tracker.py
+# groundingdino            # hybrid_tracker.py text-prompt init
 
 # Optional: Segmentation
 # SAM2: pip install git+https://github.com/facebookresearch/sam2.git

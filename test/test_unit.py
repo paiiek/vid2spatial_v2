@@ -1081,3 +1081,28 @@ class TestBridgeDistanceNormalisationDivergence:
         assert abs(sender_norm - 0.5) < 1e-9
         assert abs(bridge_norm - 0.75) < 1e-9
         assert sender_norm != bridge_norm, "if these ever agree, update the README caveat"
+
+
+class TestRequirementsCoverHardImports:
+    """Audit finding: h5py (every binaural render), filterpy (temporal_smoother
+    top-level import), PyYAML and python-osc (the `make test` contract gate) were
+    all absent from requirements.txt, so a fresh `pip install -r requirements.txt`
+    could not run the shipped test suite."""
+
+    HARD = {"h5py": "h5py", "filterpy": "filterpy",
+            "pyyaml": "yaml", "python-osc": "pythonosc"}
+
+    def test_hard_runtime_deps_are_declared(self):
+        req = (Path(__file__).parent.parent / "requirements.txt").read_text()
+        declared = set()
+        for line in req.splitlines():
+            line = line.split("#")[0].strip()
+            if line:
+                declared.add(line.split(">=")[0].split("==")[0].strip().lower())
+        missing = [d for d in self.HARD if d not in declared]
+        assert not missing, f"hard dependencies missing from requirements.txt: {missing}"
+
+    def test_declared_hard_deps_actually_import(self):
+        import importlib
+        for dist, mod in self.HARD.items():
+            importlib.import_module(mod)

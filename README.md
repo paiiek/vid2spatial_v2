@@ -41,11 +41,20 @@ Video / Sketch
 
 | Metric | Value |
 |---|---|
-| Tracking (22 LaSOT clips, AzMAE) | **1.36° ± 1.75°** (median 0.70°) |
+| Tracking (22 LaSOT clips, PixelAzMAE) | **1.36° ± 1.75°** (median 0.70°) |
+| Geometry (21 819 KITTI detections, AzMAE vs 3D labels) | **3.81°** (0.41° with true intrinsics) |
 | vs. ByteTrack baseline | −72% |
 | Perceptual study N=20, p | ≤ 0.025 (Friedman) |
 | Efficiency study N=12, time reduction | 41–49% |
 | Edit operations reduction | 87–90% |
+
+> **PixelAzMAE is a tracking metric, not a spatial one.** Its ground truth and its
+> prediction share the same pinhole model and the same assumed 60° FOV, so the
+> projection cancels and the number is a monotone reparameterisation of bbox-centre
+> pixel error. The independent geometry check is `tools/eval_azimuth_kitti.py`, which
+> takes ground truth from KITTI 3D label centres (`atan2(x_cam, z_cam)`): the deployed
+> 60° assumption costs **3.81° AzMAE**, dropping to 0.41° with the true intrinsics.
+> See `reports/azimuth_kitti_2026-09-04.md`.
 
 ---
 
@@ -274,7 +283,7 @@ test/
   test_integration.py     # integration suite
   test_bridge_contract.py # OSC plugin-boundary conformance vs bridge_contract.yaml
   run_e2e_final.py        # full eval on 22 LaSOT clips
-  run_quant_eval.py       # AzMAE / ElMAE quantitative eval
+  run_quant_eval.py       # PixelAzMAE / ElMAE quantitative eval
   run_baseline_compare.py # stereo pan baseline comparison
   render_listening_test_v3.py  # perceptual study stimuli render
   demo/                   # web demo server (video + sketch + OSC)

@@ -5,7 +5,7 @@ export CUDA_VISIBLE_DEVICES :=
 .PHONY: test contract-check contract-regen lint check-engine attach-dry-run verify-engine-audio
 
 test: contract-check
-	$(PY) -m pytest test/test_unit.py test/test_integration.py test/test_bridge_contract.py -q
+	$(PY) -m pytest test/test_unit.py test/test_integration.py test/test_bridge_contract.py test/test_geometry_render.py -q
 
 contract-check:
 	$(PY) tools/extract_bridge_contract.py --check

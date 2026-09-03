@@ -802,6 +802,21 @@ _METRIC_DEPTH_ESTIMATOR = None
 _METRIC3D_ESTIMATOR = None
 
 
+def preferred_torch_device() -> str:
+    """Return "cuda" when a torch CUDA device is really usable, else "cpu".
+
+    The depth backends below used to hardcode device="cuda", so on a CPU-only
+    host every one of them raised and was swallowed by the surrounding
+    ``except``, silently degrading to "no depth backend available" with no
+    indication of why.
+    """
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
 def get_metric_depth_estimator(scene_type: str = "auto", model_size: str = "small", device: str = "cuda"):
     """Get or create singleton metric depth estimator."""
     global _METRIC_DEPTH_ESTIMATOR
@@ -869,7 +884,7 @@ def initialize_depth_backend(
     if depth_backend in ("auto", "metric3d"):
         try:
             estimator = get_metric3d_estimator(
-                model_size=model_size, device="cuda",
+                model_size=model_size, device=preferred_torch_device(),
                 focal_length_px=focal_length_px,
             )
             if estimator is not None and estimator.model is not None:
@@ -884,7 +899,8 @@ def initialize_depth_backend(
     if depth_backend in ("auto", "metric"):
         try:
             from .depth_metric import MetricDepthEstimator
-            estimator = get_metric_depth_estimator(scene_type=scene_type, model_size="small", device="cuda")
+            estimator = get_metric_depth_estimator(scene_type=scene_type, model_size="small",
+                                                   device=preferred_torch_device())
             if estimator is not None and estimator.model is not None:
                 def metric_depth_fn(image: np.ndarray) -> np.ndarray:
                     return estimator.infer(image)
@@ -899,16 +915,16 @@ def initialize_depth_backend(
             from .depth_anything_v2 import create_depth_anything_v2_backend
             depth_fn = create_depth_anything_v2_backend(
                 model_size="small",
-                device="cuda"
+                device=preferred_torch_device(),
             )
             print("[info] Using Depth Anything V2 backend (relative depth)")
             return depth_fn, None, False
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[warn] Depth Anything V2 module unavailable: {e}, trying adapter")
         # Fallback: use depth_anything_adapter which handles the local repo path
         try:
             from .depth_anything_adapter import build_depth_predictor as _build_da
-            depth_fn = _build_da(device="cuda", backend="depth_anything_v2")
+            depth_fn = _build_da(device=preferred_torch_device(), backend="depth_anything_v2")
             print("[info] Using Depth Anything V2 backend via adapter (relative depth)")
             return depth_fn, None, False
         except Exception as e:
@@ -917,12 +933,12 @@ def initialize_depth_backend(
     # Load MiDaS (relative depth)
     if depth_backend in ("auto", "midas") and use_midas:
         try:
-            device = "cuda" if cv2.cuda.getCudaEnabledDeviceCount() > 0 else "cpu"
+            # _load_midas() selects its own torch device; nothing to choose here.
             midas_bundle = _load_midas()
             print("[info] Using MiDaS backend (relative depth)")
             return None, midas_bundle, False
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[warn] MiDaS backend failed: {e}")
 
     print("[warn] No depth backend available, using fallback")
     return None, None, False

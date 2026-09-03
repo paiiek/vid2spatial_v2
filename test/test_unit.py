@@ -7,7 +7,9 @@ vid2spatial_v2 — Unit Test Suite
     cd /home/seung/mmhoa/vid2spatial_v2
     /home/seung/miniforge3/bin/python3 test/test_unit.py [-v]
 """
-import sys, math, unittest
+import sys
+import math
+import unittest
 import numpy as np
 from pathlib import Path
 
@@ -413,7 +415,7 @@ class TestDepthUtils(unittest.TestCase):
         # area=0인 경우 div-by-zero 가능
         bbox_areas = [0.0, 100.0, 100.0]
         try:
-            proxies = self.proxy_fn(bbox_areas, initial_depth_m=2.0)
+            self.proxy_fn(bbox_areas, initial_depth_m=2.0)
             # 크래시 없이 처리되면 통과
         except ZeroDivisionError:
             self.fail("Zero bbox area caused ZeroDivisionError — needs guard")
@@ -490,8 +492,6 @@ class TestCoordinateConversion(unittest.TestCase):
         # az=45°, el=30° 에서 올바른 역변환
         az = math.radians(45)
         el = math.radians(30)
-        W, H, fov = 640, 360, 60.0
-        f_px = (W/2) / math.tan(math.radians(fov/2))
         x_ndc = math.tan(az)
         # 올바른: y_ndc = tan(el) * sqrt(1 + x_ndc^2)
         y_ndc_correct = math.tan(el) * math.sqrt(1 + x_ndc**2)
@@ -604,7 +604,7 @@ class TestEndToEndSmoke(unittest.TestCase):
         if not self.AUDIO_PATH.exists():
             self.skipTest(f"Audio not found: {self.AUDIO_PATH}")
 
-        import json, tempfile
+        import json
         from vid2spatial_pkg.foa_render import interpolate_angles_distance, encode_mono_to_foa
         import soundfile as sf
 
@@ -634,7 +634,7 @@ class TestEndToEndSmoke(unittest.TestCase):
         import json
         from vid2spatial_pkg.foa_render import (
             interpolate_angles_distance, apply_distance_gain_lpf,
-            encode_mono_to_foa, write_foa_wav
+            encode_mono_to_foa
         )
         import soundfile as sf
 
@@ -1029,3 +1029,55 @@ class TestTrajectoryExportCli:
                         str(src), str(out)], check=True, capture_output=True)
         rows = out.read_text().splitlines()
         assert rows[2].startswith("1,0.040000,")
+
+
+class TestDepthBackendDeviceSelection:
+    """Audit finding: initialize_depth_backend() hardcoded device="cuda" for every depth
+    backend, so on a CPU-only host each one raised and was swallowed by the
+    surrounding except, silently degrading to "no depth backend available"."""
+
+    def test_preferred_device_is_valid_and_matches_torch(self):
+        from vid2spatial_pkg.vision import preferred_torch_device
+        dev = preferred_torch_device()
+        assert dev in ("cuda", "cpu")
+        try:
+            import torch
+            assert dev == ("cuda" if torch.cuda.is_available() else "cpu")
+        except ImportError:
+            assert dev == "cpu"
+
+    def test_no_backend_hardcodes_cuda(self):
+        """Guard against the regression coming back."""
+        import inspect
+        from vid2spatial_pkg import vision
+        src = inspect.getsource(vision.initialize_depth_backend)
+        assert 'device="cuda"' not in src
+        assert "device='cuda'" not in src
+
+    def test_depth_backend_failures_are_not_silent(self):
+        """Every except in get_depth_backend must report, not `pass`."""
+        import inspect
+        from vid2spatial_pkg import vision
+        src = inspect.getsource(vision.initialize_depth_backend)
+        assert "except Exception:\n            pass" not in src
+
+
+class TestBridgeDistanceNormalisationDivergence:
+    """Documented GAP (README 'Offline automation export'): send_frame emits
+    /vid2spatial/distance normalised over distance_max_m (10 m) AND, last,
+    /vid2spatial/spatial carrying raw metres which the engine bridge normalises
+    over 20 m.  The bundle wins, so a live bridge halves the distance range.
+    This test pins the divergence so it cannot drift further unnoticed."""
+
+    BRIDGE_MAX_M = 20.0
+
+    def test_sender_and_bridge_disagree_by_exactly_2x(self):
+        from vid2spatial_pkg.osc_sender import OSCConfig
+        cfg = OSCConfig()
+        assert cfg.distance_max_m == 10.0, "sender-side normalisation constant moved"
+        dist_m = 5.0
+        sender_norm = 1.0 - min(dist_m / cfg.distance_max_m, 1.0)   # /distance path
+        bridge_norm = max(0.0, min(1.0, 1.0 - dist_m / self.BRIDGE_MAX_M))  # /spatial path
+        assert abs(sender_norm - 0.5) < 1e-9
+        assert abs(bridge_norm - 0.75) < 1e-9
+        assert sender_norm != bridge_norm, "if these ever agree, update the README caveat"

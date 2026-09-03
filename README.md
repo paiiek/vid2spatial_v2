@@ -180,6 +180,24 @@ Use `--dry-run` to print every packet without sending, and `--limit N` for a
 short probe. Verified end to end against the lane bridge: 40 frames in, 40
 `/adm/obj/1/aed` out, azimuth `-57.2958` becoming `+57.2958`, object id 1.
 
+**The engine needs a speaker layout, or it renders silence.** Start the engine
+with `--layout` pointing at a valid layout (for example
+`spatial_engine-proto/configs/lab_8ch.yaml`). Without one it falls back to a
+layout that renders digital silence for *everything*, including the
+`/noise/{ch}/*` per-speaker verification signal that bypasses objects entirely,
+and it says only `[warn] layout load failed: ... using fallback`. Measured on
+`build_L1`: no layout gives peak `0.000000` on 0/8 channels; a valid layout
+gives `0.404724` on 7/8 for per-speaker noise and `0.242737` on 4/8 for a panned
+object. Verify with `make verify-engine-audio`.
+
+Two things that look like causes of that silence but are not: the object id base
+(an `/adm/obj/N/aed` message activates the object by itself, so a wrong
+`/obj/active` id still makes sound once a layout is loaded) and a missing input
+source (`--object-source sine` generates internal tones; no `/noise` or
+`/obj/input` routing is required). Note the ids do differ, though: `/obj/active`,
+`/obj/gain` and `/obj/input` take **internal 0-based** object ids, while
+`/adm/obj/N` is 1-based wire, mapping N to internal N-1.
+
 **The `low_latency` trap.** The bridge polls the global file
 `/tmp/.spe_bridge_mode` and, if it holds `low_latency`, forwards **nothing**
 while still accepting every packet — overriding both `config.yaml` and

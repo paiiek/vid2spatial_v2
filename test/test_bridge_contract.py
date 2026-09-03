@@ -456,3 +456,32 @@ def test_attach_dry_run_emits_engine_side_values(tmp_path, capsys):
     assert "45.0000" in out
     # 2.5 m over a 10 m range -> v2s 0.75 near -> ADM dist 0.25
     assert "0.2500" in out
+
+
+def test_engine_audio_diagnostic_is_runnable_and_documents_the_layout_cause():
+    """The engine-silence report was wrong: a missing speaker layout, not the
+    engine, was the cause. Keep the corrected conclusion and the matrix that
+    proves it attached to the script, and keep the script executable."""
+    script = Path(__file__).resolve().parent.parent / "tools" / "repro_engine_silence.sh"
+    assert script.exists()
+    assert os.access(script, os.X_OK), "diagnostic must stay executable"
+    body = script.read_text()
+    # the corrected verdict, not the old "engine renders silence" claim
+    assert "VALID SPEAKER LAYOUT" in body
+    assert "engine HEALTHY" in body
+    # it must exercise the object path AND the object-bypassing noise path,
+    # both with and without a layout, or it cannot isolate the cause
+    for probe in ("/noise/", "/adm/obj/1/aed", "--layout", "A_nolayout_noise",
+                  "C_layout_noise", "D_layout_object"):
+        assert probe in body, probe
+    # the two red herrings must stay recorded so nobody re-chases them
+    assert "INTERNAL" in body and "0-BASED" in body
+    assert "--object-source sine" in body
+
+
+def test_readme_documents_the_layout_requirement():
+    readme = (Path(__file__).resolve().parent.parent / "README.md").read_text()
+    assert "speaker layout, or it renders silence" in readme
+    assert "--layout" in readme
+    # and the id-base fact the engine's own wire contract pins
+    assert "internal 0-based" in readme

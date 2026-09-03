@@ -1,97 +1,131 @@
 #!/usr/bin/env bash
-# Minimal standalone reproduction: spatial_engine_core renders SILENCE for an
-# activated ADM object driven over OSC.
+# Engine audio diagnostic: does spatial_engine_core render audio, and if not, why?
 #
-# vid2spatial is NOT involved. Everything below talks straight to the engine's
-# own ADM-OSC port with its own documented activation sequence, so this is an
-# engine-side reproduction that the engine session can run unchanged.
+# HISTORY. An earlier version of this script sent an object activation sequence
+# with no --layout and concluded "the engine renders silence". That conclusion
+# was WRONG. This version runs the isolation matrix that found the real cause.
 #
-#   bash tools/repro_engine_silence.sh
-#   bash tools/repro_engine_silence.sh /path/to/spatial_engine_core
+# RESULT (build_L1, 2026-09-03). The engine is fine. A VALID SPEAKER LAYOUT is
+# the necessary and sufficient condition:
 #
-# Exit 0 = engine produced audio (bug is GONE). Exit 1 = silence reproduced.
+#   variant                                    peak       non-silent ch
+#   A  no layout,   per-speaker noise          0.000000   0/8
+#   B  no layout,   object via ADM             0.000000   0/8
+#   C  valid layout, per-speaker noise         0.404724   7/8
+#   D  valid layout, object via ADM            0.242737   4/8
 #
-# OBSERVED 2026-09-03, build_L1 @ spatial_engine-proto:
-#   8-channel WAV, 385472 frames, peak = 0.0 exactly, every channel -inf dBFS.
-#   Reproduces with and without --layout, with --object-source sine, after
-#   /obj/active, /obj/gain and /sys/master. The engine logs no warning; it
-#   prints "objects start INACTIVE - send /obj/active <id> 1", which this
-#   script does.
+# Per-speaker noise (/noise/{ch}/*) bypasses object activation, panning and
+# routing entirely, so A proves the silence is NOT about objects. Without a
+# usable layout the engine falls back to one that renders digital silence, and
+# says only "[warn] layout load failed: ... using fallback".
+#
+# Two things that look like causes but are NOT:
+#   * object id base. /adm/obj/N/aed activates the object itself, so a wrong
+#     /obj/active id still produces audio once a layout is loaded (0.196655).
+#     (The ids do differ: /obj/active, /obj/gain and /obj/input take INTERNAL
+#     0-BASED ids, while /adm/obj/N is 1-based wire, N -> internal N-1.)
+#   * a missing input source. --object-source sine generates internal tones;
+#     no /noise or /obj/input routing is needed to hear an object.
+#
+#   bash tools/repro_engine_silence.sh                 # run the whole matrix
+#   ENGINE=... LAYOUT=... bash tools/repro_engine_silence.sh
+#
+# Exit 0 = the engine produced audio whenever it was given a layout (healthy).
+# Exit 1 = it stayed silent WITH a valid layout — then it really is an engine bug.
 set -uo pipefail
 
-ENGINE="${1:-/home/seung/mmhoa/spatial_engine-proto/build_L1/core/spatial_engine_core}"
-OUT="${OUT:-$(mktemp -d)/repro_engine_silence.wav}"
-SECONDS_RUN="${SECONDS_RUN:-6}"
+ENGINE="${ENGINE:-${1:-/home/seung/mmhoa/spatial_engine-proto/build_L1/core/spatial_engine_core}}"
+LAYOUT="${LAYOUT:-/home/seung/mmhoa/spatial_engine-proto/configs/lab_8ch.yaml}"
 OSC_PORT="${OSC_PORT:-9100}"
 CHANNELS="${CHANNELS:-8}"
+SECS="${SECS:-5}"
+D="$(mktemp -d)"
 
 echo "engine : $ENGINE"
-echo "wav    : $OUT"
-echo "osc    : 127.0.0.1:$OSC_PORT   channels=$CHANNELS   seconds=$SECONDS_RUN"
+echo "layout : $LAYOUT"
+echo "out    : $D"
+echo
 
-if [[ ! -x "$ENGINE" ]]; then
-  echo "FATAL: engine binary not executable: $ENGINE" >&2
-  exit 2
-fi
-if ! python3 -c "import pythonosc, soundfile, numpy" 2>/dev/null; then
-  echo "FATAL: need python3 with pythonosc, soundfile, numpy" >&2
-  exit 2
-fi
+[[ -x "$ENGINE" ]] || { echo "FATAL: engine not executable: $ENGINE" >&2; exit 2; }
+[[ -r "$LAYOUT" ]] || { echo "FATAL: layout not readable: $LAYOUT" >&2; exit 2; }
+python3 -c "import pythonosc, soundfile, numpy" 2>/dev/null \
+  || { echo "FATAL: need python3 with pythonosc, soundfile, numpy" >&2; exit 2; }
 
-# Free the OSC port so a stale listener cannot swallow the run.
-for p in $(ss -ulnp 2>/dev/null | grep -E ":$OSC_PORT " \
-           | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u); do
-  echo "note: killing stale listener on $OSC_PORT (pid $p)"
-  kill -9 "$p" 2>/dev/null
-done
-sleep 0.5
-
-nice -n 10 "$ENGINE" \
-  --backend null --osc-port "$OSC_PORT" --osc-bind 127.0.0.1 \
-  --osc-dialect adm --object-source sine \
-  --channels "$CHANNELS" --seconds "$SECONDS_RUN" --wav "$OUT" \
-  > "${OUT%.wav}.engine.log" 2>&1 &
-ENG=$!
-sleep 2
-
-python3 - "$OSC_PORT" <<'PY'
+cat > "$D/noise.py" <<'PY'
 import sys, time
 from pythonosc.udp_client import SimpleUDPClient
 c = SimpleUDPClient("127.0.0.1", int(sys.argv[1]))
-# The activation sequence the engine's own --help prescribes.
-c.send_message("/obj/active", [1, 1])
-c.send_message("/obj/gain",   [1, 1.0])
-c.send_message("/sys/master", [1.0])
+# Per-speaker verification signal. Bypasses objects, panning and routing.
+for ch in range(int(sys.argv[2])):
+    c.send_message(f"/noise/{ch}/type", ["pink"])   # ,s white|pink|sweep|passthrough
+    c.send_message(f"/noise/{ch}/gain", [-6.0])     # ,f dB
+time.sleep(2.0)
+PY
+
+cat > "$D/object.py" <<'PY'
+import sys, time
+from pythonosc.udp_client import SimpleUDPClient
+c = SimpleUDPClient("127.0.0.1", int(sys.argv[1]))
+# /obj/* take INTERNAL 0-BASED ids; /adm/obj/N is 1-based wire (N -> N-1).
+c.send_message("/obj/active", [0, 1])
+c.send_message("/obj/gain",   [0, 1.0])
 time.sleep(0.3)
-# Sweep the object across the front arc at a constant near distance.
 for i in range(90):
     c.send_message("/adm/obj/1/aed", [float(-60 + 1.5 * i), 0.0, 0.5])
     time.sleep(0.03)
-print("sent: /obj/active 1 1, /obj/gain 1 1.0, /sys/master 1.0, 90x /adm/obj/1/aed")
 PY
 
-wait "$ENG" 2>/dev/null
-
-python3 - "$OUT" <<'PY'
+run() {  # run <slug> <driver.py> <layout-flag...>
+  local slug="$1" driver="$2"; shift 2
+  for p in $(ss -ulnp 2>/dev/null | grep -E ":$OSC_PORT " \
+             | grep -oE 'pid=[0-9]+' | cut -d= -f2 | sort -u); do
+    kill -9 "$p" 2>/dev/null
+  done
+  sleep 0.3
+  nice -n 10 "$ENGINE" --backend null --osc-port "$OSC_PORT" --osc-bind 127.0.0.1 \
+    --osc-dialect adm --object-source sine "$@" \
+    --channels "$CHANNELS" --seconds "$SECS" --wav "$D/$slug.wav" \
+    > "$D/$slug.log" 2>&1 &
+  local eng=$!
+  sleep 2
+  python3 "$driver" "$OSC_PORT" "$CHANNELS" >/dev/null 2>&1
+  wait "$eng" 2>/dev/null
+  python3 - "$D/$slug.wav" "$slug" "$D/$slug.log" <<'PY'
 import sys, os
 import numpy as np, soundfile as sf
-p = sys.argv[1]
-if not os.path.exists(p):
-    print("FAIL: engine produced no WAV at all"); raise SystemExit(1)
-d, sr = sf.read(p, dtype="float32", always_2d=True)
+wav, slug, log = sys.argv[1:4]
+if not os.path.exists(wav):
+    print(f"  {slug:34s} NO WAV PRODUCED"); raise SystemExit(2)
+d, sr = sf.read(wav, dtype="float32", always_2d=True)
 peak = float(np.max(np.abs(d)))
 rms = np.sqrt(np.mean(d.astype(np.float64) ** 2, axis=0))
-print(f"wav: {d.shape[0]} frames x {d.shape[1]} ch @ {sr} Hz")
-print(f"peak = {peak!r}")
-print("per-channel RMS dBFS:", np.round(20 * np.log10(rms + 1e-20), 1).tolist())
-if peak > 0.0:
-    print("\nPASS: engine produced audio — the silence bug is GONE."); raise SystemExit(0)
-print("\nREPRODUCED: engine rendered digital silence (peak exactly 0.0)")
-print("for an activated object driven over its own ADM-OSC port.")
-raise SystemExit(1)
+db = 20 * np.log10(rms + 1e-20)
+warn = [l.strip() for l in open(log) if "layout" in l.lower() and "warn" in l.lower()]
+print(f"  {slug:34s} peak={peak:<10.6f} non-silent={int((db > -200).sum())}/{d.shape[1]}"
+      + (f"   {warn[0]}" if warn else ""))
+raise SystemExit(0 if peak > 0.0 else 1)
 PY
-rc=$?
+  return $?
+}
+
+echo "=== WITHOUT a layout (the original, wrong repro) ==="
+run "A_nolayout_noise"  "$D/noise.py";  A=$?
+run "B_nolayout_object" "$D/object.py"; B=$?
 echo
-echo "engine log tail:"
-tail -6 "${OUT%.wav}.engine.log"
-exit $rc
+echo "=== WITH a valid layout ==="
+run "C_layout_noise"  "$D/noise.py"  --layout "$LAYOUT"; C=$?
+run "D_layout_object" "$D/object.py" --layout "$LAYOUT"; D_=$?
+
+echo
+if [[ $C -eq 0 && $D_ -eq 0 ]]; then
+  echo "VERDICT: engine HEALTHY."
+  if [[ $A -ne 0 || $B -ne 0 ]]; then
+    echo "The silence reproduces ONLY without a usable speaker layout, including for"
+    echo "per-speaker noise that never touches the object path. Pass --layout"
+    echo "$LAYOUT (or any valid layout); the fallback renders silence."
+  fi
+  exit 0
+fi
+echo "VERDICT: engine rendered SILENCE even WITH a valid layout — this is an"
+echo "engine bug. Artifacts: $D"
+exit 1

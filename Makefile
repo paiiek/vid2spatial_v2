@@ -2,7 +2,7 @@
 PY ?= python3
 export CUDA_VISIBLE_DEVICES :=
 
-.PHONY: test contract-check contract-regen lint check-engine attach-dry-run
+.PHONY: test contract-check contract-regen lint check-engine attach-dry-run verify-engine-audio
 
 test: contract-check
 	$(PY) -m pytest test/test_unit.py test/test_integration.py test/test_bridge_contract.py -q
@@ -23,6 +23,11 @@ check-engine:
 
 attach-dry-run:
 	$(PY) tools/attach_engine.py $(TRAJ) --dry-run --limit 5
+
+# Offline proof that the engine actually renders audio (needs a lane binary).
+# Also the isolation matrix for "the engine is silent" reports.
+verify-engine-audio:
+	bash tools/repro_engine_silence.sh
 
 ENGINE_HOST ?= 127.0.0.1
 ENGINE_PORT ?= 9000

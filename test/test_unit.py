@@ -1506,3 +1506,71 @@ class TestDocumentedResults(unittest.TestCase):
         m = self._read("reports/gain_mode_loudness_2026-09-04.md")
         self.assertIn("bbox_area_log", m)
         self.assertIn("ear check is still open", m)
+
+
+# ── A12: composed (estimated z0 + proxy) depth error ─────────────────────────
+
+class TestComposedDepthZ0(unittest.TestCase):
+    """verify_depth_heuristic calibrated the bbox-area proxy on each track's
+    first GT depth, i.e. handed it an oracle the deployed system does not have.
+    --z0-from swaps that for an ESTIMATE so the composed error can be reported.
+    """
+
+    @staticmethod
+    def _tool():
+        import importlib.util
+        path = pathlib.Path(__file__).resolve().parent.parent / "tools" / "verify_depth_heuristic.py"
+        spec = importlib.util.spec_from_file_location("vdh", path)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    def test_estimated_z0_scales_the_whole_track(self):
+        """The proxy is z = z0*sqrt(A0/A), so a wrong z0 scales every depth by
+        the same factor -- the composed error can never be below the z0 error."""
+        m = self._tool()
+        areas = [100.0, 50.0, 25.0]
+        gt = np.array([10.0, 14.142, 20.0])
+        exact = m._track_metrics(areas, gt, None)
+        doubled = m._track_metrics(areas, gt, None, z0=20.0)
+        self.assertLess(exact["abs_rel"], 1e-3)
+        self.assertAlmostEqual(doubled["abs_rel"], 1.0, places=2)
+        # ranking is untouched by a scale error
+        self.assertAlmostEqual(exact["spearman_scale_proxy"],
+                               doubled["spearman_scale_proxy"], places=6)
+
+    def test_load_z0_accepts_the_tool_output_and_a_bare_mapping(self):
+        import json
+        import tempfile
+        m = self._tool()
+        with tempfile.TemporaryDirectory() as td:
+            a = pathlib.Path(td) / "a.json"
+            a.write_text(json.dumps({"model": "x", "z0": {"0000_0": 12.5}}))
+            b = pathlib.Path(td) / "b.json"
+            b.write_text(json.dumps({"0000_0": 12.5}))
+            self.assertEqual(m.load_z0(str(a)), {"0000_0": 12.5})
+            self.assertEqual(m.load_z0(str(b)), {"0000_0": 12.5})
+        self.assertIsNone(m.load_z0(None))
+
+    def test_report_labels_which_z0_it_used(self):
+        """A composed number and a proxy-only number must not be confusable."""
+        m = self._tool()
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        gt = repo / "test" / "full_eval" / "depth_gt.json"
+        if not gt.exists():
+            self.skipTest("no depth GT on disk")
+        oracle = m.evaluate_against_gt(gt)
+        self.assertIn("proxy term only", oracle["z0_source"])
+
+    def test_only_tracks_with_an_estimate_are_scored(self):
+        m = self._tool()
+        repo = pathlib.Path(__file__).resolve().parent.parent
+        gt = repo / "test" / "full_eval" / "depth_gt.json"
+        if not gt.exists():
+            self.skipTest("no depth GT on disk")
+        import json
+        one = json.loads(gt.read_text())[0]["track"]
+        rep = m.evaluate_against_gt(gt, {one: 10.0})
+        self.assertEqual(rep["n_tracks"], 1)
+        self.assertIn("composed", rep["z0_source"])
+        self.assertIn("z0_est_m", rep["per_track"][one])

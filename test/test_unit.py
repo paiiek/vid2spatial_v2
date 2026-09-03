@@ -1283,3 +1283,53 @@ class TestDeadModuleImports(unittest.TestCase):
         import inspect
         from vid2spatial_pkg import pipeline
         self.assertNotIn("from .occlusion import", inspect.getsource(pipeline))
+
+
+# ── A11: unbenchmarked backends live under experimental/ ─────────────────────
+
+class TestExperimentalBackends(unittest.TestCase):
+    """Four tracker backends are reachable from vision.py but appear in no
+    evaluation table, and none can go through run_quant_eval.py (bbox-init on
+    arbitrary LaSOT categories). They are quarantined under experimental/ so a
+    reader can tell what is load-bearing."""
+
+    MOVED = ("ostrack_wrapper", "color_tracker", "skeleton_tracker", "point_tracker")
+
+    def test_modules_live_under_experimental(self):
+        import importlib
+        for name in self.MOVED:
+            m = importlib.import_module(f"vid2spatial_pkg.experimental.{name}")
+            self.assertTrue(m.__name__.endswith(f"experimental.{name}"))
+
+    def test_old_import_paths_still_work_but_warn(self):
+        import importlib
+        import sys
+        import warnings
+        for name in self.MOVED:
+            sys.modules.pop(f"vid2spatial_pkg.{name}", None)
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                importlib.import_module(f"vid2spatial_pkg.{name}")
+            self.assertTrue(any(issubclass(x.category, DeprecationWarning) for x in w),
+                            f"{name} shim did not warn")
+
+    def test_vision_imports_the_experimental_path(self):
+        import inspect
+        from vid2spatial_pkg import vision
+        src = inspect.getsource(vision)
+        for name in self.MOVED:
+            self.assertIn(f"from .experimental.{name} import", src)
+
+    def test_public_symbols_survive_the_move(self):
+        from vid2spatial_pkg.experimental.color_tracker import color_track
+        from vid2spatial_pkg.experimental.point_tracker import point_track
+        from vid2spatial_pkg.experimental.skeleton_tracker import skeleton_track
+        from vid2spatial_pkg.experimental.ostrack_wrapper import track_with_ostrack
+        for fn in (color_track, point_track, skeleton_track, track_with_ostrack):
+            self.assertTrue(callable(fn))
+
+    def test_stabilizer_is_not_quarantined(self):
+        """It has a unit test and a measured ablation, so it stays."""
+        import importlib
+        m = importlib.import_module("vid2spatial_pkg.trajectory_stabilizer")
+        self.assertNotIn("experimental", m.__name__)

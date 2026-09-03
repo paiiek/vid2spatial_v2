@@ -635,7 +635,7 @@ def _initialize_ostrack_tracking(
             init_bbox = get_fallback_bbox()
 
     try:
-        from .ostrack_wrapper import track_with_ostrack
+        from .experimental.ostrack_wrapper import track_with_ostrack
         print("[info] Using OSTrack tracker...")
         return track_with_ostrack(video_path, init_bbox, sample_stride)
     except Exception as e:
@@ -711,7 +711,7 @@ def _initialize_color_tracking(
     Returns:
         Trajectory list
     """
-    from .color_tracker import color_track
+    from .experimental.color_tracker import color_track
     return color_track(
         video_path=video_path,
         target_color=target_color,
@@ -746,7 +746,7 @@ def _initialize_point_tracking(
     Returns:
         Trajectory list
     """
-    from .point_tracker import point_track
+    from .experimental.point_tracker import point_track
     return point_track(
         video_path=video_path,
         method=point_method,
@@ -781,7 +781,7 @@ def _initialize_skeleton_tracking(
     Returns:
         Trajectory list
     """
-    from .skeleton_tracker import skeleton_track
+    from .experimental.skeleton_tracker import skeleton_track
     return skeleton_track(
         video_path=video_path,
         joint_name=skeleton_joint,

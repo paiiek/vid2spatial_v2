@@ -1106,3 +1106,31 @@ class TestRequirementsCoverHardImports:
         import importlib
         for dist, mod in self.HARD.items():
             importlib.import_module(mod)
+
+
+class TestReadmeQuickStartMatchesCode:
+    """Audit finding: the README Quick Start documented an API that never
+    existed — V2SpatialTracker(video_path=..., bbox_init=..., tracker_type=...)
+    with a .run() returning an object with .save().  The real class takes depth
+    options in __init__ and the clip in track(), and returns a plain dict."""
+
+    def test_tracker_constructor_and_track_signature(self):
+        import inspect
+        from vid2spatial_pkg.v2_spatial_tracker import V2SpatialTracker
+        init = inspect.signature(V2SpatialTracker.__init__).parameters
+        assert {"depth_backend", "fov_deg"} <= set(init)
+        assert "video_path" not in init and "bbox_init" not in init
+        track = inspect.signature(V2SpatialTracker.track).parameters
+        assert {"video_path", "init_bbox", "method", "yw_det_threshold"} <= set(track)
+        assert not hasattr(V2SpatialTracker, "run")
+
+    def test_direct_binaural_sofa_positional_order(self):
+        import inspect
+        from vid2spatial_pkg.foa_render import direct_binaural_sofa
+        names = list(inspect.signature(direct_binaural_sofa).parameters)
+        assert names[:5] == ["mono", "sr", "az_s", "el_s", "sofa_path"]
+
+    def test_readme_does_not_reference_the_phantom_api(self):
+        readme = (Path(__file__).parent.parent / "README.md").read_text()
+        for phantom in ("tracker.run()", "traj.save(", "bbox_init=", "az_rad="):
+            assert phantom not in readme, f"README still shows {phantom}"

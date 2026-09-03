@@ -75,28 +75,43 @@ Download KEMAR SOFA file separately and set `sofa_path` in config.
 ### Video mode (single bbox)
 
 ```python
+import json
 from vid2spatial_pkg.v2_spatial_tracker import V2SpatialTracker
 
-tracker = V2SpatialTracker(
-    video_path="input.mp4",
-    bbox_init=[x, y, w, h],   # draw once
-    tracker_type="yw_sam2",
-    det_threshold=0.99,
+# Camera/depth options go to the constructor; the clip goes to track().
+tracker = V2SpatialTracker(depth_backend="metric3d", fov_deg=60.0)
+traj = tracker.track(                 # returns a plain trajectory dict
+    "input.mp4",
+    init_bbox=(x, y, w, h),           # draw once
+    method="adaptive_k",              # or "auto" / "v1_bytetrack"
+    yw_det_threshold=0.99,
 )
-traj = tracker.run()           # returns per-frame spatial parameter stream
-traj.save("output/traj.json")
+json.dump(traj, open("output/traj.json", "w"))
 ```
+
+`traj` is a dict — `{"fps": ..., "frames": [{"frame", "az", "el", "dist_m", ...}]}` —
+not an object, so write it with `json.dump`. For the full video-to-audio run
+(tracking plus render plus export in one call) use
+`vid2spatial_pkg.pipeline.SpatialAudioPipeline(...).run()` instead.
 
 ### Render binaural
 
 ```python
 from vid2spatial_pkg.foa_render import direct_binaural_sofa
 
-binaural = direct_binaural_sofa(
-    audio_mono, sr=48000,
-    az_rad=traj.az, el_rad=traj.el,
-    sofa_path="kemar.sofa"
-)
+# direct_binaural_sofa(mono, sr, az_s, el_s, sofa_path, block_ms=10.0)
+# az_s/el_s are PER-AUDIO-SAMPLE arrays (radians), not per-frame — build them
+# from the trajectory first.  Note the SOFA/AmbiX azimuth sign flip.
+from vid2spatial_pkg.foa_render import interpolate_angles_distance
+
+az_s, el_s, dist_s, d_rel_s = interpolate_angles_distance(
+    traj["frames"], len(audio_mono), 48000, fps=traj["fps"])
+binaural = direct_binaural_sofa(audio_mono, 48000, -az_s, el_s, "kemar.sofa")
+
+# Or render straight to a file, which also applies the distance gain/LPF:
+from vid2spatial_pkg.foa_render import render_binaural_from_trajectory
+render_binaural_from_trajectory("mono.wav", traj, "out.wav", "kemar.sofa",
+                                gain_mode="bbox_area_log")
 ```
 
 ### OSC streaming

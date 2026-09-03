@@ -108,6 +108,47 @@ class SpatialConfig:
 
 
 @dataclass
+class MultiSourceConfig:
+    """Offline multi-object rendering.
+
+    OFFLINE ONLY. Each source is tracked from its own init bbox, rendered
+    through the same per-source chain as the single-source path, summed with
+    ``foa_render.encode_many_to_foa``, and exported as its own automation file
+    with ADM object_id 1..N.
+
+    LIMITATION -- there is no live multi-object OSC path. The bridge keys every
+    datagram on the single tracking id "default" and the ADR's
+    ``/vid2spatial/obj/{N}/azim`` family is not implemented engine-side, so
+    streaming N sources would collapse them onto object 1. Use the automation
+    export (one file per object) to drive a DAW instead.
+    """
+    enabled: bool = False
+    # One (x, y, w, h) per source, in the first frame. len() == n_sources.
+    init_bboxes: List[Tuple[int, int, int, int]] = field(default_factory=list)
+    # Optional per-source mono audio. Empty -> every source uses
+    # PipelineConfig.audio_path (useful for geometry tests).
+    audio_paths: List[str] = field(default_factory=list)
+
+    @property
+    def n_sources(self) -> int:
+        return len(self.init_bboxes)
+
+    def __post_init__(self):
+        if not self.enabled:
+            return
+        if self.n_sources < 2:
+            raise ValueError(
+                f"multi_source.enabled needs at least 2 init_bboxes, got {self.n_sources}")
+        if self.audio_paths and len(self.audio_paths) != self.n_sources:
+            raise ValueError(
+                f"multi_source: {len(self.audio_paths)} audio_paths for "
+                f"{self.n_sources} init_bboxes -- give one per source or none")
+        for b in self.init_bboxes:
+            if len(b) != 4:
+                raise ValueError(f"init_bbox must be (x, y, w, h), got {b!r}")
+
+
+@dataclass
 class OcclusionConfig:
     """Occlusion handling configuration.
 
@@ -183,6 +224,7 @@ class PipelineConfig:
     room: RoomConfig = field(default_factory=RoomConfig)
     spatial: SpatialConfig = field(default_factory=SpatialConfig)
     occlusion: OcclusionConfig = field(default_factory=OcclusionConfig)
+    multi_source: MultiSourceConfig = field(default_factory=MultiSourceConfig)
     reverb: ReverbConfig = field(default_factory=ReverbConfig)
     output: OutputConfig = field(default_factory=lambda: OutputConfig(foa_path="out.foa.wav"))
 
@@ -301,6 +343,11 @@ class PipelineConfig:
 
         if "occlusion" in data and isinstance(data["occlusion"], dict):
             data["occlusion"] = OcclusionConfig(**data["occlusion"])
+
+        if "multi_source" in data and isinstance(data["multi_source"], dict):
+            ms = dict(data["multi_source"])
+            ms["init_bboxes"] = [tuple(b) for b in ms.get("init_bboxes", [])]
+            data["multi_source"] = MultiSourceConfig(**ms)
 
         if "reverb" in data and isinstance(data["reverb"], dict):
             data["reverb"] = ReverbConfig(**data["reverb"])

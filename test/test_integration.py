@@ -803,3 +803,146 @@ class TestScenarioEndToEnd(unittest.TestCase):
 if __name__ == "__main__":
     import unittest
     unittest.main(verbosity=2)
+
+
+# ── A5: multi_source wired into the offline pipeline ─────────────────────────
+
+class TestPipelineMultiSourceOffline(unittest.TestCase):
+    """`multi_source.py` was dead: nothing in the pipeline reached it and the
+    delivered artefact was strictly one source. The offline path now tracks one
+    source per init bbox, sums them with encode_many_to_foa, and writes one
+    automation file per ADM object 1..N.
+
+    There is deliberately NO live multi-object OSC path: the bridge keys every
+    datagram on the single tracking id "default".
+    """
+
+    SR = 16000
+    DUR = 1.0
+
+    def _cfg(self, **ms):
+        from vid2spatial_pkg.config import MultiSourceConfig, OutputConfig, PipelineConfig
+        c = PipelineConfig(video_path="none.mp4", audio_path="none.wav",
+                           output=OutputConfig(foa_path="out.foa.wav"))
+        c.multi_source = MultiSourceConfig(**ms)
+        return c
+
+    @staticmethod
+    def _traj(az_deg, n=30, fps=30.0):
+        """Static source at a fixed azimuth (pipeline convention: RIGHT = +)."""
+        return {"fps": fps,
+                "frames": [{"frame": i, "az": math.radians(az_deg), "el": 0.0,
+                            "dist_m": 2.0, "conf": 1.0} for i in range(n)]}
+
+    def _tone(self, f):
+        t = np.arange(int(self.SR * self.DUR)) / self.SR
+        return (0.5 * np.sin(2 * np.pi * f * t)).astype(np.float32)
+
+    @staticmethod
+    def _band_energy(x, sr, f0, half=120.0):
+        """Energy of x in [f0-half, f0+half]."""
+        X = np.fft.rfft(x * np.hanning(len(x)))
+        freqs = np.fft.rfftfreq(len(x), 1.0 / sr)
+        m = (freqs >= f0 - half) & (freqs <= f0 + half)
+        return float(np.sum(np.abs(X[m]) ** 2))
+
+    def test_two_sources_map_to_separate_sides(self):
+        """The headline claim: two objects at opposite azimuths land on
+        opposite sides of the FOA field, each identifiable by its own tone."""
+        pipe = SpatialAudioPipeline(self._cfg(
+            enabled=True, init_bboxes=[(10, 10, 40, 40), (200, 10, 40, 40)]))
+        f_left, f_right = 500.0, 4000.0
+        # source 1 hard LEFT of image (az < 0), source 2 hard RIGHT (az > 0)
+        foa = pipe._render_multi_source(
+            [self._tone(f_left), self._tone(f_right)], self.SR,
+            [self._traj(-90.0), self._traj(+90.0)])
+
+        self.assertEqual(foa.shape[0], 4)
+        # AmbiX ACN: W, Y, Z, X. Y = sin(az_ambix)cos(el); az_ambix = -az_pipeline,
+        # so the LEFT source (az_pipeline = -90) has Y = +1 and the RIGHT one -1.
+        W, Y = foa[0], foa[1]
+        left, right = W + Y, W - Y  # virtual left / right cardioid-ish decode
+
+        e_left_lo = self._band_energy(left, self.SR, f_left)
+        e_right_lo = self._band_energy(right, self.SR, f_left)
+        e_left_hi = self._band_energy(left, self.SR, f_right)
+        e_right_hi = self._band_energy(right, self.SR, f_right)
+
+        # each source's tone dominates its own side by a wide margin
+        self.assertGreater(e_left_lo, 10.0 * e_right_lo,
+                           "left source's tone did not dominate the left decode")
+        self.assertGreater(e_right_hi, 10.0 * e_left_hi,
+                           "right source's tone did not dominate the right decode")
+        # and both sources actually survived the mix
+        self.assertGreater(e_left_lo, 0.0)
+        self.assertGreater(e_right_hi, 0.0)
+
+    def test_three_sources_and_unequal_lengths(self):
+        """N > 2 and ragged source lengths must not raise (encode_many_to_foa
+        asserts equal lengths; the pipeline pads)."""
+        pipe = SpatialAudioPipeline(self._cfg(
+            enabled=True, init_bboxes=[(0, 0, 9, 9), (1, 1, 9, 9), (2, 2, 9, 9)]))
+        a = self._tone(500.0)
+        foa = pipe._render_multi_source(
+            [a, a[: len(a) // 2], a[: len(a) // 3]], self.SR,
+            [self._traj(-60.0), self._traj(0.0), self._traj(+60.0)])
+        self.assertEqual(foa.shape, (4, len(a)))
+        self.assertTrue(np.isfinite(foa).all())
+
+    def test_mix_equals_sum_of_single_source_renders(self):
+        """The multi path must be the single path summed, not a second
+        implementation that can drift from it."""
+        pipe = SpatialAudioPipeline(self._cfg(
+            enabled=True, init_bboxes=[(0, 0, 9, 9), (1, 1, 9, 9)]))
+        audios = [self._tone(500.0), self._tone(4000.0)]
+        trajs = [self._traj(-45.0), self._traj(+45.0)]
+        mix = pipe._render_multi_source(audios, self.SR, trajs)
+        singles = [pipe._render_spatial_audio(a, self.SR, t) for a, t in zip(audios, trajs)]
+        summed = singles[0] + singles[1]
+        # encode_many_to_foa peak-normalises the sum, so compare shape-wise
+        scale = float(np.max(np.abs(summed))) / max(float(np.max(np.abs(mix))), 1e-12)
+        np.testing.assert_allclose(mix * scale, summed, atol=1e-4)
+
+    def test_per_object_export_is_one_to_n(self):
+        """One automation file per ADM object, ids 1..N, addressed /adm/obj/N/aed."""
+        import json
+        from vid2spatial_pkg.trajectory_export import export_trajectory
+        with tempfile.TemporaryDirectory() as td:
+            base = os.path.join(td, "auto.json")
+            paths = []
+            for i, az in enumerate((-30.0, 30.0, 0.0)):
+                oid = i + 1
+                stem, ext = os.path.splitext(base)
+                p = export_trajectory(self._traj(az), f"{stem}.obj{oid}{ext}",
+                                      fps=30.0, object_id=oid)
+                paths.append(p)
+            self.assertEqual(len(paths), 3)
+            for i, p in enumerate(paths):
+                doc = json.loads(open(p).read())
+                self.assertEqual(doc["object_id"], i + 1)
+                self.assertEqual(doc["osc_address"], f"/adm/obj/{i + 1}/aed")
+
+    def test_config_rejects_a_single_bbox_and_mismatched_audio(self):
+        from vid2spatial_pkg.config import MultiSourceConfig
+        with self.assertRaises(ValueError):
+            MultiSourceConfig(enabled=True, init_bboxes=[(0, 0, 9, 9)])
+        with self.assertRaises(ValueError):
+            MultiSourceConfig(enabled=True, init_bboxes=[(0, 0, 9, 9), (1, 1, 9, 9)],
+                              audio_paths=["a.wav"])
+        # disabled config with no bboxes is the default and must be fine
+        self.assertEqual(MultiSourceConfig().n_sources, 0)
+
+    def test_run_dispatches_to_multi_source(self):
+        import inspect
+        src = inspect.getsource(SpatialAudioPipeline.run)
+        self.assertIn("multi_source.enabled", src)
+        self.assertIn("run_multi_source", src)
+
+    def test_no_live_osc_object_addresses_were_added(self):
+        """The engine does not implement /vid2spatial/obj/{N}/...; adding it
+        here would stream N sources into a void."""
+        import inspect
+        from vid2spatial_pkg import osc_sender
+        self.assertNotIn("/obj/", inspect.getsource(osc_sender))
+        from vid2spatial_pkg.config import MultiSourceConfig
+        self.assertIn("no live multi-object osc path", MultiSourceConfig.__doc__.lower())

@@ -515,22 +515,20 @@ class SpatialAudioPipeline:
         # absent or unreadable.
         return None
 
-    def _render_spatial_audio(
+    def _prepare_source(
         self,
         audio: np.ndarray,
         sr: int,
         trajectory: Dict[str, Any]
-    ) -> np.ndarray:
-        """
-        Render spatial FOA audio from mono audio and trajectory.
+    ):
+        """Trajectory -> audio-rate angles + distance-processed mono.
 
-        Args:
-            audio: Mono audio signal
-            sr: Sample rate
-            trajectory: 3D trajectory dict
+        Everything the FOA encoder needs for ONE source, so that the
+        single-source and multi-source paths cannot drift apart.
 
         Returns:
-            FOA audio [4, T]
+            (audio_dist, az_s, el_s, d_rel_s, occ_s) -- az_s is in the pipeline's
+            RIGHT-positive convention and must be negated before encoding.
         """
         T = audio.shape[0]
 
@@ -583,14 +581,11 @@ class SpatialAudioPipeline:
             )
             audio_dist = apply_timevarying_reverb_mono(audio_dist, sr, wet, rt60=self.config.reverb.rt60)
 
-        # Encode to FOA
-        # Pipeline az convention: az>0 = RIGHT of image (atan2(x,z))
-        # AmbiX/SOFA convention: az>0 = LEFT (counterclockwise from front)
-        # → must negate before FOA encoding (same as render_foa_from_trajectory)
-        print('[info] Encoding to first-order ambisonics...')
-        foa = encode_mono_to_foa(audio_dist, -az_s, el_s)
+        return audio_dist, az_s, el_s, d_rel_s, occ_s
 
-        # Optional FOA AIR convolution
+    def _apply_foa_air(self, foa, sr, d_rel_s, occ_s):
+        """Optional FOA AIR convolution / time-varying FOA reverb."""
+        T = foa.shape[1]
         if self.config.air_foa_path:
             print(f'[info] Applying FOA AIR from {self.config.air_foa_path}')
             import soundfile as sf
@@ -617,6 +612,33 @@ class SpatialAudioPipeline:
                 foa = foa_conv
 
         return foa
+
+    def _render_spatial_audio(
+        self,
+        audio: np.ndarray,
+        sr: int,
+        trajectory: Dict[str, Any]
+    ) -> np.ndarray:
+        """
+        Render spatial FOA audio from mono audio and trajectory.
+
+        Args:
+            audio: Mono audio signal
+            sr: Sample rate
+            trajectory: 3D trajectory dict
+
+        Returns:
+            FOA audio [4, T]
+        """
+        audio_dist, az_s, el_s, d_rel_s, occ_s = self._prepare_source(audio, sr, trajectory)
+
+        # Encode to FOA
+        # Pipeline az convention: az>0 = RIGHT of image (atan2(x,z))
+        # AmbiX/SOFA convention: az>0 = LEFT (counterclockwise from front)
+        # → must negate before FOA encoding (same as render_foa_from_trajectory)
+        print('[info] Encoding to first-order ambisonics...')
+        foa = encode_mono_to_foa(audio_dist, -az_s, el_s)
+        return self._apply_foa_air(foa, sr, d_rel_s, occ_s)
 
     def _write_outputs(self, foa: np.ndarray, sr: int):
         """
@@ -656,6 +678,124 @@ class SpatialAudioPipeline:
             import soundfile as sf
             sf.write(self.config.output.binaural_path, binaural.T, sr)
 
+    # ── multi-source (offline) ───────────────────────────────────────────
+
+    def _compute_trajectory_for_bbox(self, bbox) -> Dict[str, Any]:
+        """One source's trajectory, tracked from its own init bbox.
+
+        The tracker config is swapped in place and restored, so every source
+        goes through exactly the same code path as a single-source run.
+        """
+        tk = self.config.vision.tracking
+        saved_bbox, saved_traj_json = tk.init_bbox, self.config.trajectory_json
+        saved_out = self.config.output.trajectory_path
+        try:
+            tk.init_bbox = tuple(bbox)
+            # a precomputed single-object trajectory would override every source
+            self.config.trajectory_json = None
+            self.config.output.trajectory_path = None
+            return self._compute_trajectory()
+        finally:
+            tk.init_bbox = saved_bbox
+            self.config.trajectory_json = saved_traj_json
+            self.config.output.trajectory_path = saved_out
+
+    def _render_multi_source(self, audios, sr, trajectories) -> np.ndarray:
+        """Sum N sources into one FOA bed via encode_many_to_foa.
+
+        Each source is prepared by the same _prepare_source used by the
+        single-source renderer, then zero-padded to the longest source so the
+        encoder's length assertions hold.
+        """
+        from .foa_render import encode_many_to_foa
+
+        prepared = [self._prepare_source(a, sr, t) for a, t in zip(audios, trajectories)]
+        T = max(x[0].shape[0] for x in prepared)
+
+        def _pad(v):
+            return v if v.shape[0] == T else np.pad(v, (0, T - v.shape[0]), mode="edge")
+
+        monos, azs, els = [], [], []
+        for audio_dist, az_s, el_s, _d, _o in prepared:
+            monos.append(np.pad(audio_dist, (0, T - audio_dist.shape[0])).astype(np.float32))
+            # angles hold at their last value rather than snapping to 0
+            azs.append(_pad(az_s))
+            els.append(_pad(el_s))
+
+        print(f'[info] Encoding {len(monos)} sources to first-order ambisonics...')
+        # same RIGHT-positive -> AmbiX LEFT-positive negation as the single path
+        foa = encode_many_to_foa(monos, [-a for a in azs], els)
+
+        # AIR / FOA reverb is a property of the room, so it is applied once to
+        # the mix, driven by the first source's distance and occlusion curves.
+        d_rel_s, occ_s = _pad(prepared[0][3]), prepared[0][4]
+        if occ_s is not None:
+            occ_s = _pad(occ_s)
+        return self._apply_foa_air(foa, sr, d_rel_s, occ_s)
+
+    def run_multi_source(self) -> Dict[str, Any]:
+        """Offline N-source render: per-source track, mixed FOA, per-object export.
+
+        There is NO live multi-object OSC path -- see MultiSourceConfig.
+        """
+        ms = self.config.multi_source
+        if not ms.enabled:
+            raise ValueError("multi_source.enabled is False; use run()")
+        n = ms.n_sources
+        print('=' * 60)
+        print(f'Spatial Audio Pipeline -- multi-source ({n} sources, offline)')
+        print('=' * 60)
+
+        print(f'\n[1/4] Tracking {n} sources...')
+        trajectories = []
+        for i, bbox in enumerate(ms.init_bboxes):
+            print(f'      source {i + 1}/{n}: init bbox {tuple(bbox)}')
+            trajectories.append(self._compute_trajectory_for_bbox(bbox))
+        self._trajectory = trajectories[0]
+
+        exports = []
+        if self.config.output.automation_path:
+            from .trajectory_export import export_trajectory
+            base = Path(self.config.output.automation_path)
+            for i, traj in enumerate(trajectories):
+                object_id = i + 1  # ADM object numbers are 1-based
+                out = export_trajectory(
+                    traj, base.with_name(f"{base.stem}.obj{object_id}{base.suffix}"),
+                    fps=float(traj.get('fps') or 30.0), object_id=object_id,
+                )
+                exports.append(str(out))
+                print(f'      → object {object_id} automation: {out}')
+
+        print(f'\n[2/4] Loading audio for {n} sources...')
+        paths = ms.audio_paths or [self.config.audio_path] * n
+        audios, sr = [], None
+        for path in paths:
+            a, sr = librosa.load(path, sr=sr, mono=True)
+            audios.append(self._apply_room_ir(a, sr))
+
+        print('\n[3/4] Rendering multi-source spatial audio...')
+        foa = self._render_multi_source(audios, sr, trajectories)
+        print(f'      → Generated FOA audio: {foa.shape}')
+
+        print('\n[4/4] Writing outputs...')
+        self._write_outputs(foa, sr)
+
+        return {
+            "trajectories": trajectories,
+            "trajectory": trajectories[0],
+            "num_sources": n,
+            "sample_rate": sr,
+            "duration_sec": foa.shape[1] / sr,
+            "num_frames": len(trajectories[0]["frames"]),
+            "automation_exports": exports,
+            "live_osc_supported": False,
+            "outputs": {
+                "foa": self.config.output.foa_path,
+                "stereo": self.config.output.stereo_path,
+                "binaural": self.config.output.binaural_path,
+            },
+        }
+
     def run(self) -> Dict[str, Any]:
         """
         Run the complete spatial audio pipeline.
@@ -663,6 +803,9 @@ class SpatialAudioPipeline:
         Returns:
             Dictionary with pipeline outputs and metadata
         """
+        if self.config.multi_source.enabled:
+            return self.run_multi_source()
+
         print('='*60)
         print('Spatial Audio Pipeline')
         print('='*60)

@@ -244,10 +244,35 @@ def test_distance_normalisation_near_is_one(contract, sender_msgs, demo_msgs):
 
 
 def test_spatial_bundle_carries_metres_not_normalised(contract, sender_msgs):
-    """/vid2spatial/spatial[2] is METRES; the bridge normalises it itself (20 m)."""
+    """/vid2spatial/spatial[2] is METRES; the bridge normalises it itself."""
     sp = dict(sender_msgs)["/vid2spatial/spatial"]
     assert sp[2] == FRAME["dist_m"]
-    assert contract["bridge"]["handlers"]["/vid2spatial/spatial"]["dist_max_m"] == 20.0
+    assert "dist_max_m" in contract["bridge"]["handlers"]["/vid2spatial/spatial"]
+
+
+def test_sender_and_bridge_distance_laws_agree(contract):
+    """LOUD GUARD on the attach boundary.
+
+    send_frame emits /vid2spatial/distance normalised over the sender's
+    distance_max_m AND, last, /vid2spatial/spatial carrying raw metres that the
+    bridge normalises over its own DISTANCE_MAX_M.  The bundle arrives last and
+    wins, so if the two constants disagree the engine silently receives a
+    rescaled distance -- exactly the 10 m vs 20 m halving that shipped before
+    fix/lane-bridge-handoff.  Never let them drift apart again.
+    """
+    from vid2spatial_pkg.osc_sender import OSCConfig
+    bridge_max = contract["bridge"]["handlers"]["/vid2spatial/spatial"]["dist_max_m"]
+    sender_max = OSCConfig().distance_max_m
+    contract_max = contract["conventions"]["dist_norm"]["sender_distance_max_m"]
+    assert sender_max == bridge_max == contract_max, (
+        f"distance normalisation disagrees: sender={sender_max} m, "
+        f"bridge={bridge_max} m, contract={contract_max} m -- the engine would "
+        f"receive distances scaled by {bridge_max / sender_max:.2f}x")
+    # and the two paths must therefore produce the same normalised value
+    for dist_m in (0.0, 2.5, 5.0, 9.9, 10.0, 25.0):
+        via_distance = 1.0 - min(dist_m / sender_max, 1.0)
+        via_spatial = max(0.0, min(1.0, 1.0 - dist_m / bridge_max))
+        assert abs(via_distance - via_spatial) < 1e-9, dist_m
 
 
 def test_elevation_identity(contract, sender_msgs):
@@ -348,3 +373,86 @@ def test_bridge_contract_no_drift():
     r = subprocess.run([sys.executable, str(EXTRACTOR), "--check", "--bridge", str(BRIDGE_PATH)],
                        capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, f"bridge contract drift:\n{r.stdout}\n{r.stderr}"
+
+
+# ── attach-readiness: tools/attach_engine.py ────────────────────────────────
+
+def _attach():
+    import importlib.util
+    path = Path(__file__).resolve().parent.parent / "tools" / "attach_engine.py"
+    spec = importlib.util.spec_from_file_location("attach_engine", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _defaults(mod):
+    return {a.dest: a.default for a in mod.build_parser()._actions}
+
+
+def test_attach_defaults_match_the_contract(contract):
+    """The attach command's defaults are the engine's values, not guesses."""
+    d = _defaults(_attach())
+    assert d["object_id"] == contract["export"]["default_object_id"] == 1
+    assert d["distance_max_m"] == \
+        contract["bridge"]["handlers"]["/vid2spatial/spatial"]["dist_max_m"] == 10.0
+    assert d["az_sign"] == "right-positive"
+    assert d["port"] == contract["bridge"]["listen_port"] == 9000
+    assert d["host"] == "127.0.0.1"
+
+
+def test_attach_rejects_zero_object_id():
+    """ADM object numbers are 1-based; 0 must be refused, not silently sent."""
+    mod = _attach()
+    with pytest.raises(SystemExit):
+        mod.main(["--object-id", "0", "--check-engine"])
+
+
+def test_attach_preflight_catches_low_latency_mode_file(tmp_path, monkeypatch):
+    """A stale /tmp/.spe_bridge_mode silences the bridge with no error at all."""
+    mod = _attach()
+    f = tmp_path / "mode"
+    monkeypatch.setattr(mod, "BRIDGE_MODE_FILE", f)
+    f.write_text("low_latency\n")
+    with pytest.raises(mod.PreflightError, match="low_latency"):
+        mod._check_bridge_mode()
+    f.write_text("ai\n")
+    assert "forwarding enabled" in mod._check_bridge_mode()
+    f.unlink()
+    assert "no override" in mod._check_bridge_mode() or "no /" in mod._check_bridge_mode()
+
+
+def test_attach_preflight_catches_distance_law_mismatch(monkeypatch):
+    """The 10 m vs 20 m halving must fail the preflight, not ship silently."""
+    mod = _attach()
+    assert "distance_max_m=10.0" in mod._check_constants()
+    from vid2spatial_pkg import osc_sender
+
+    class Bad:
+        distance_max_m = 20.0
+
+    monkeypatch.setattr(osc_sender, "OSCConfig", lambda: Bad())
+    with pytest.raises(mod.PreflightError, match="disagrees"):
+        mod._check_constants()
+
+
+def test_attach_preflight_fails_when_nothing_is_listening():
+    """Unreachable engine must fail loudly rather than stream into a void."""
+    mod = _attach()
+    with pytest.raises(mod.PreflightError):
+        mod._check_roundtrip("127.0.0.1", 9, timeout=0.4)
+
+
+def test_attach_dry_run_emits_engine_side_values(tmp_path, capsys):
+    """Dry run must show the ADM values the engine will actually receive."""
+    mod = _attach()
+    traj = tmp_path / "t.json"
+    traj.write_text(json.dumps({"fps": 30.0, "frames": [
+        {"frame": 0, "az": math.radians(-45.0), "el": 0.0, "dist_m": 2.5}]}))
+    assert mod.main([str(traj), "--dry-run"]) == 0
+    out = capsys.readouterr().out
+    assert "/adm/obj/1/aed" in out
+    # az -45 (left of image) must reach the engine as +45 (ADM is left-positive)
+    assert "45.0000" in out
+    # 2.5 m over a 10 m range -> v2s 0.75 near -> ADM dist 0.25
+    assert "0.2500" in out

@@ -1063,6 +1063,60 @@ class TestDepthBackendDeviceSelection:
         assert "except Exception:\n            pass" not in src
 
 
+class TestBridgeDistanceNormalisation:
+    """The sender-side normalisation constant must stay at the value the engine
+    bridge uses (DISTANCE_MAX_M on fix/lane-bridge-handoff).  Before that lane
+    the bridge used 20 m against the sender's 10 m and the live chain silently
+    halved the distance range.  test_bridge_contract.py holds the cross-repo
+    half of this guard; this is the cheap local one."""
+
+    ENGINE_DISTANCE_MAX_M = 10.0
+
+    def test_sender_constant_matches_engine(self):
+        from vid2spatial_pkg.osc_sender import OSCConfig
+        assert OSCConfig().distance_max_m == self.ENGINE_DISTANCE_MAX_M
+
+    def test_normalisation_is_near_is_one(self):
+        from vid2spatial_pkg.osc_sender import OSCSpatialSender, OSCConfig
+        s = OSCSpatialSender.__new__(OSCSpatialSender)
+        s.config = OSCConfig()
+        assert s._normalize_distance(0.0) == 1.0
+        assert s._normalize_distance(10.0) == 0.0
+        assert s._normalize_distance(25.0) == 0.0
+        assert abs(s._normalize_distance(5.0) - 0.5) < 1e-9
+
+
+class TestDepthBackendDeviceSelection:
+    """Audit finding: initialize_depth_backend() hardcoded device="cuda" for every depth
+    backend, so on a CPU-only host each one raised and was swallowed by the
+    surrounding except, silently degrading to "no depth backend available"."""
+
+    def test_preferred_device_is_valid_and_matches_torch(self):
+        from vid2spatial_pkg.vision import preferred_torch_device
+        dev = preferred_torch_device()
+        assert dev in ("cuda", "cpu")
+        try:
+            import torch
+            assert dev == ("cuda" if torch.cuda.is_available() else "cpu")
+        except ImportError:
+            assert dev == "cpu"
+
+    def test_no_backend_hardcodes_cuda(self):
+        """Guard against the regression coming back."""
+        import inspect
+        from vid2spatial_pkg import vision
+        src = inspect.getsource(vision.initialize_depth_backend)
+        assert 'device="cuda"' not in src
+        assert "device='cuda'" not in src
+
+    def test_depth_backend_failures_are_not_silent(self):
+        """Every except in get_depth_backend must report, not `pass`."""
+        import inspect
+        from vid2spatial_pkg import vision
+        src = inspect.getsource(vision.initialize_depth_backend)
+        assert "except Exception:\n            pass" not in src
+
+
 class TestBridgeDistanceNormalisationDivergence:
     """Documented GAP (README 'Offline automation export'): send_frame emits
     /vid2spatial/distance normalised over distance_max_m (10 m) AND, last,

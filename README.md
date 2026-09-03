@@ -142,6 +142,51 @@ read from an argparse namespace as `--automation-path` if your parser defines it
 trajectory loader (its `TimelineJson` only carries scene-snapshot keyframes), so this
 is a documented interchange format, not a native engine file.
 
+### Attach to engine in 3 steps
+
+vid2spatial is developed detached from `spatial_engine`; these three commands
+are the whole attach procedure. The wire contract is pinned against the engine's
+`fix/lane-bridge-handoff` bridge (`build_dispatcher`, `DISTANCE_MAX_M = 10.0`).
+
+```bash
+# 1. start the engine-side bridge (in the spatial_engine repo)
+python3 bridge/vid2spatial_osc.py --listen-port 9000 --target-port 9100 \
+        --config bridge/config.yaml
+
+# 2. preflight: wire contract, boundary constants, bridge mode, reachability, round-trip
+python3 tools/attach_engine.py --check-engine --host 127.0.0.1 --port 9000
+
+# 3. stream a trajectory
+python3 tools/attach_engine.py traj.json --host 127.0.0.1 --port 9000 \
+        --object-id 1 --distance-max-m 10.0 --az-sign right-positive
+```
+
+Step 2 refuses to continue rather than streaming into a void. It fails loudly on
+a drifted wire contract, on a sender/bridge distance-law mismatch (which would
+silently rescale distance), on a non-1-based object id, on an unreachable
+bridge, and on the `low_latency` trap below. Step 3 runs the same preflight
+first unless you pass `--skip-preflight`.
+
+Everything that could silently disagree across the boundary is an explicit flag
+with an engine-matching default:
+
+| Flag | Default | Why it matters |
+|---|---|---|
+| `--distance-max-m` | `10.0` | Must equal the bridge's `DISTANCE_MAX_M`. A mismatch rescales distance with no error anywhere. |
+| `--object-id` | `1` | ADM object numbers are **1-based** (`/adm/obj/1/aed`). |
+| `--az-sign` | `right-positive` | vid2spatial azimuth is right-positive, ADM-OSC is left-positive, so the bridge negates. |
+
+Use `--dry-run` to print every packet without sending, and `--limit N` for a
+short probe. Verified end to end against the lane bridge: 40 frames in, 40
+`/adm/obj/1/aed` out, azimuth `-57.2958` becoming `+57.2958`, object id 1.
+
+**The `low_latency` trap.** The bridge polls the global file
+`/tmp/.spe_bridge_mode` and, if it holds `low_latency`, forwards **nothing**
+while still accepting every packet — overriding both `config.yaml` and
+`--mode`, and logging nothing after startup. A stale file left by any WebGUI or
+bridge on the machine silences the attach. The preflight checks it; to clear it
+by hand, `rm /tmp/.spe_bridge_mode`.
+
 ### Bridge contract (plugin boundary with spatial_engine)
 
 `vid2spatial_pkg/bridge_contract.yaml` pins every OSC message vid2spatial emits

@@ -37,13 +37,18 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
 
 _REPO = Path(__file__).resolve().parent.parent
 DEFAULT_BRIDGE = Path(os.environ.get(
-    "V2S_BRIDGE_PATH", "/home/seung/mmhoa/spatial_engine/bridge/vid2spatial_osc.py"))
+    "V2S_BRIDGE_PATH", "/home/seung/mmhoa/spatial_engine-proto/bridge/vid2spatial_osc.py"))
+# The attach target is the lane branch, not whatever the engine tree happens to
+# have checked out (another session works there and its HEAD moves).  --ref /
+# V2S_BRIDGE_REF reads the bridge out of that git ref instead of the worktree.
+DEFAULT_BRIDGE_REF = os.environ.get("V2S_BRIDGE_REF", "fix/lane-bridge-handoff")
 DEFAULT_ADR = Path("/home/seung/mmhoa/spatial_engine-proto/docs/adr/vid2spatial_osc_contract.md")
 DEFAULT_OUT = _REPO / "vid2spatial_pkg" / "bridge_contract.yaml"
 
@@ -258,9 +263,28 @@ def _diff(a, b, path="") -> list[str]:
     return out
 
 
+def _materialise_ref(bridge: Path, ref: str) -> tuple[Path, str] | None:
+    """Write `ref`'s copy of the bridge to a temp file. Returns (path, commit)."""
+    repo = bridge.resolve().parent.parent
+    rel = bridge.resolve().relative_to(repo)
+    try:
+        blob = subprocess.check_output(["git", "-C", str(repo), "show", f"{ref}:{rel}"],
+                                       stderr=subprocess.DEVNULL)
+        commit = subprocess.check_output(["git", "-C", str(repo), "rev-parse", ref],
+                                         stderr=subprocess.DEVNULL, text=True).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    tmp = Path(tempfile.mkdtemp(prefix="v2s_bridge_")) / bridge.name
+    tmp.write_bytes(blob)
+    return tmp, commit
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--bridge", type=Path, default=DEFAULT_BRIDGE)
+    ap.add_argument("--ref", default=DEFAULT_BRIDGE_REF,
+                    help="read the bridge from this git ref of the engine repo "
+                         "instead of its worktree ('' = use the worktree file)")
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT)
     ap.add_argument("--check", action="store_true", help="exit 1 on semantic drift")
     args = ap.parse_args(argv)
@@ -269,11 +293,20 @@ def main(argv=None) -> int:
         print(f"SKIP: bridge source not present: {args.bridge}")
         return 0
 
-    fresh = extract(args.bridge)
     bridge_repo = args.bridge.resolve().parent.parent
+    ref_commit = None
+    if args.ref:
+        got = _materialise_ref(args.bridge, args.ref)
+        if got is None:
+            print(f"SKIP: ref {args.ref!r} not found in {bridge_repo}")
+            return 0
+        args.bridge, ref_commit = got
+
+    fresh = extract(args.bridge)
     provenance = {
         "bridge_repo": str(bridge_repo),
-        "bridge_commit": _git_head(bridge_repo),
+        "bridge_ref": args.ref or "(worktree)",
+        "bridge_commit": ref_commit or _git_head(bridge_repo),
         "adr": str(DEFAULT_ADR),
         "adr_repo_commit": _git_head(DEFAULT_ADR.parent.parent.parent),
     }

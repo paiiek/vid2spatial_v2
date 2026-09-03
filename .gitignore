@@ -42,3 +42,6 @@ weights/
 .DS_Store
 wandb/
 *.log
+
+# OMC session tooling state (not project content)
+.omc/

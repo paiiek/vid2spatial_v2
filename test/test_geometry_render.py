@@ -8,6 +8,7 @@ a real SOFA file or the KITTI labels skips cleanly when they are absent.
 from __future__ import annotations
 
 import importlib.util
+import math
 import sys
 from pathlib import Path
 
@@ -334,3 +335,106 @@ class TestCameraMotion:
                                                         mode=cm.MODE_WORLD_FRAME)
         assert out["frames"][0]["az"] == pytest.approx(0.3)
         assert out["camera_motion"]["method"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# A8 — HRTF interpolation instead of nearest-neighbour
+# ---------------------------------------------------------------------------
+def _ring_grid(step_deg=5.0):
+    """A horizontal-only measurement ring: the KEMAR-like degenerate case."""
+    az = np.radians(np.arange(0.0, 360.0, step_deg))
+    src_cart = np.stack([np.cos(az), np.sin(az), np.zeros_like(az)], axis=1)
+    # a 1-tap "HRIR" whose taps encode cos/sin of the direction, so the
+    # interpolated value can be checked against the exact angle
+    ir = np.zeros((len(az), 2, 4), dtype=np.float64)
+    ir[:, 0, 0] = np.cos(az)
+    ir[:, 1, 0] = np.sin(az)
+    return src_cart, ir
+
+
+class TestHrirInterpolation:
+    def test_weights_sum_to_one_and_are_nonnegative(self):
+        from vid2spatial_pkg.foa_render import hrir_barycentric_weights
+        rng = np.random.default_rng(0)
+        src = rng.standard_normal((200, 3))
+        src /= np.linalg.norm(src, axis=1, keepdims=True)
+        for _ in range(50):
+            q = rng.standard_normal(3)
+            q /= np.linalg.norm(q)
+            idx, w = hrir_barycentric_weights(src, q)
+            assert idx.shape == (3,) and w.shape == (3,)
+            assert w.sum() == pytest.approx(1.0)
+            assert np.all(w >= 0.0)
+
+    def test_exact_grid_point_returns_that_hrir(self):
+        from vid2spatial_pkg.foa_render import make_hrir_lookup
+        src, ir = _ring_grid()
+        for mode in ("nearest", "barycentric"):
+            lk = make_hrir_lookup(src, ir, mode=mode)
+            h = lk(math.radians(35.0), 0.0)
+            assert h[0, 0] == pytest.approx(math.cos(math.radians(35.0)), abs=1e-6)
+            assert h[1, 0] == pytest.approx(math.sin(math.radians(35.0)), abs=1e-6)
+
+    def test_interpolation_tracks_the_true_angle_between_grid_points(self):
+        from vid2spatial_pkg.foa_render import make_hrir_lookup
+        src, ir = _ring_grid(step_deg=5.0)
+        near = make_hrir_lookup(src, ir, mode="nearest")
+        bary = make_hrir_lookup(src, ir, mode="barycentric")
+        for a in (1.0, 2.5, 4.0, 12.5, 47.5):
+            truth = math.sin(math.radians(a))
+            # a linear blend of two grid directions is a chord, not an arc, so
+            # it undershoots the true value by O(spacing^2) -- ~1e-3 at 5 deg
+            assert bary(math.radians(a), 0.0)[1, 0] == pytest.approx(truth, abs=1.5e-3)
+        # nearest snaps to the grid: at 2.5 deg it is stuck on a grid point
+        assert near(math.radians(2.5), 0.0)[1, 0] in (
+            pytest.approx(math.sin(math.radians(0.0)), abs=1e-9),
+            pytest.approx(math.sin(math.radians(5.0)), abs=1e-9),
+        )
+
+    def test_nearest_is_a_staircase_and_barycentric_is_not(self):
+        from vid2spatial_pkg.foa_render import make_hrir_lookup
+        src, ir = _ring_grid(step_deg=5.0)
+        angles = np.radians(np.linspace(0.0, 20.0, 201))
+        for mode, expect_unique in (("nearest", 6), ("barycentric", 150)):
+            lk = make_hrir_lookup(src, ir, mode=mode)
+            vals = np.array([lk(a, 0.0)[1, 0] for a in angles])
+            n_unique = len(np.unique(np.round(vals, 9)))
+            if mode == "nearest":
+                assert n_unique <= expect_unique     # one value per 5 deg cell
+            else:
+                assert n_unique >= expect_unique     # continuously varying
+
+    def test_unknown_mode_rejected(self):
+        from vid2spatial_pkg.foa_render import make_hrir_lookup
+        src, ir = _ring_grid()
+        with pytest.raises(ValueError):
+            make_hrir_lookup(src, ir, mode="cubic")
+
+    def test_render_paths_expose_the_switch(self):
+        import inspect
+        from vid2spatial_pkg.foa_render import (
+            direct_binaural_sofa, foa_to_binaural_sofa,
+            render_binaural_from_trajectory)
+        for fn in (direct_binaural_sofa, foa_to_binaural_sofa,
+                   render_binaural_from_trajectory):
+            p = inspect.signature(fn).parameters
+            assert "hrir_interp" in p
+            assert p["hrir_interp"].default == "barycentric"
+
+    def test_itd_staircase_measured_on_a_real_sofa(self):
+        """The A8 acceptance measurement, on the real 5 deg KEMAR grid."""
+        harness = REPO_ROOT / "test" / "run_hrtf_interp_check.py"
+        spec = importlib.util.spec_from_file_location("hrtf_interp_check", harness)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        sofa = mod.find_sofa()
+        if not sofa or mod.grid_spacing_deg(sofa) < 2.0:
+            pytest.skip("no sparse SOFA grid available")
+        res = mod.run(sofa, arc_deg=90.0, dur_s=4.0)
+        near = res["modes"]["nearest"]
+        bary = res["modes"]["barycentric"]
+        # both must still sweep the full arc
+        assert bary["recovered_range_deg"] > 60.0
+        # interpolation must remove the big discrete jumps
+        assert bary["step_max_deg"] < near["step_max_deg"] * 0.6
+        assert bary["mean_abs_second_diff_deg"] < near["mean_abs_second_diff_deg"]

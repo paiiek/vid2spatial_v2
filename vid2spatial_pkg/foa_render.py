@@ -636,6 +636,7 @@ def render_binaural_from_trajectory(
     apply_reverb: bool = False,
     rt60: float = 0.5,
     block_ms: float = 10.0,
+    hrir_interp: str = "barycentric",
     use_learned_mapping: bool = False,
     learned_model_path: str = None,
     gain_mode: str = "depth_rel",
@@ -668,7 +669,8 @@ def render_binaural_from_trajectory(
     az_sofa = -az_s
 
     # Direct HRTF binaural render (before reverb, so spatial cues are crisp)
-    stereo = direct_binaural_sofa(audio_proc, sr, az_sofa, el_s, sofa_path, block_ms=block_ms)
+    stereo = direct_binaural_sofa(audio_proc, sr, az_sofa, el_s, sofa_path,
+                                  block_ms=block_ms, hrir_interp=hrir_interp)
 
     # Apply reverb to stereo AFTER HRTF (reverb is diffuse, shouldn't mask spatial cues)
     if apply_reverb:
@@ -752,9 +754,97 @@ def foa_to_binaural(foa_sn3d: np.ndarray, sr: int) -> np.ndarray:
     return np.stack([Lo.astype(np.float32), Ro.astype(np.float32)], 0)
 
 
+HRIR_INTERP_MODES = ("nearest", "barycentric")
+
+
+def hrir_barycentric_weights(src_cart: np.ndarray, q: np.ndarray):
+    """Barycentric weights over the 3 nearest SOFA directions (gap item A8).
+
+    A KEMAR SOFA grid is typically 5 deg in azimuth, so nearest-neighbour lookup
+    snaps a smoothly moving source between HRIRs: audible zipper artefacts, and
+    an effective angular resolution floor of ~5 deg -- far coarser than the
+    trajectory being fed to it.
+
+    Solve `A w = q` where the columns of A are the three nearest unit
+    measurement directions, then normalise so the weights sum to 1. That is the
+    exact barycentric coordinate of the query direction inside the spherical
+    triangle. If the query falls outside the triangle (a negative weight) or the
+    triangle is degenerate, fall back to inverse-angular-distance weighting over
+    the same three points, which is always non-negative and still continuous.
+
+    Args:
+        src_cart: (M, 3) unit vectors of the measurement grid.
+        q:        (3,) unit vector of the query direction.
+
+    Returns:
+        (idx, w) with idx an int array of 3 indices into src_cart and w a
+        float64 array of 3 non-negative weights summing to 1.
+    """
+    dots = src_cart @ q
+    # the 3 closest directions, ordered closest first
+    idx = np.argpartition(-dots, 3)[:3]
+    idx = idx[np.argsort(-dots[idx])]
+    P = src_cart[idx]                      # (3, 3), rows are directions
+
+    w = None
+    try:
+        w = np.linalg.solve(P.T, q)        # columns of P.T are the directions
+    except np.linalg.LinAlgError:
+        w = None
+    if w is None or not np.all(np.isfinite(w)) or np.any(w < -1e-9):
+        # Outside the triangle, or degenerate -- which is the normal case on a
+        # planar grid, e.g. a horizontal-only measurement ring, where the three
+        # nearest directions are coplanar with the query and the solve is
+        # singular. Fall back to a linear blend of the two bracketing
+        # directions, weighted by angular distance. On a ring that reproduces
+        # exact angular interpolation; elsewhere it is still continuous.
+        ang = np.arccos(np.clip(dots[idx], -1.0, 1.0))
+        if float(ang[0]) < 1e-9:
+            w = np.array([1.0, 0.0, 0.0])
+        else:
+            a0, a1 = float(ang[0]), float(ang[1])
+            denom = a0 + a1
+            w = (np.array([a1 / denom, a0 / denom, 0.0]) if denom > 1e-12
+                 else np.array([1.0, 0.0, 0.0]))
+    w = np.maximum(w, 0.0)
+    total = float(w.sum())
+    if total <= 0.0:
+        w = np.array([1.0, 0.0, 0.0])
+        total = 1.0
+    return idx, (w / total)
+
+
+def make_hrir_lookup(src_cart: np.ndarray, ir_data: np.ndarray,
+                     mode: str = "barycentric"):
+    """Build an (az, el) -> HRIR (2, L) lookup in the requested mode.
+
+    mode="nearest":     argmax of the dot product (pre-2026-09-04 behaviour,
+                        kept for stimulus reproducibility).
+    mode="barycentric": weighted sum over the 3 nearest measurement directions.
+    """
+    if mode not in HRIR_INTERP_MODES:
+        raise ValueError(f"unknown hrir_interp {mode!r}; expected one of {HRIR_INTERP_MODES}")
+
+    def _q(az: float, el: float) -> np.ndarray:
+        return np.array([math.cos(el) * math.cos(az),
+                         math.cos(el) * math.sin(az),
+                         math.sin(el)], dtype=np.float64)
+
+    if mode == "nearest":
+        def lookup(az: float, el: float) -> np.ndarray:
+            return ir_data[int(np.argmax(src_cart @ _q(az, el)))]
+    else:
+        def lookup(az: float, el: float) -> np.ndarray:
+            idx, w = hrir_barycentric_weights(src_cart, _q(az, el))
+            return np.tensordot(w, ir_data[idx], axes=(0, 0)).astype(ir_data.dtype)
+
+    return lookup
+
+
 def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
                          el_s: np.ndarray, sofa_path: str,
-                         block_ms: float = 50.0) -> np.ndarray:
+                         block_ms: float = 50.0,
+                         hrir_interp: str = "barycentric") -> np.ndarray:
     """Render mono to binaural using direct HRTF lookup per time block.
 
     Instead of FOA virtual-speaker decode (which washes out high-frequency
@@ -812,12 +902,7 @@ def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
     win_len = hop * 2  # 50% overlap
     window = np.hanning(win_len).astype(np.float64)
 
-    def find_nearest_hrir(az, el):
-        qx = np.cos(el) * np.cos(az)
-        qy = np.cos(el) * np.sin(az)
-        qz = np.sin(el)
-        dots = src_cart[:, 0]*qx + src_cart[:, 1]*qy + src_cart[:, 2]*qz
-        return ir_data[int(np.argmax(dots))]  # (2, hrir_len)
+    hrir_lookup = make_hrir_lookup(src_cart, ir_data, mode=hrir_interp)
 
     out = np.zeros((2, T), dtype=np.float64)
 
@@ -836,7 +921,7 @@ def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
         # HRIR lookup at frame center
         az_med = float(np.median(az_s[start:min(start + hop, T)]))
         el_med = float(np.median(el_s[start:min(start + hop, T)]))
-        hrir = find_nearest_hrir(az_med, el_med)
+        hrir = hrir_lookup(az_med, el_med)
 
         # Extended input for correct convolution at [start, end)
         ext_start = max(0, start - hrir_len + 1)
@@ -861,7 +946,8 @@ def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
     return out.astype(np.float32)
 
 
-def foa_to_binaural_sofa(foa_sn3d: np.ndarray, sr: int, sofa_path: str) -> np.ndarray:
+def foa_to_binaural_sofa(foa_sn3d: np.ndarray, sr: int, sofa_path: str,
+                         hrir_interp: str = "barycentric") -> np.ndarray:
     """Decode FOA (AmbiX ACN/SN3D [W,Y,Z,X]) to binaural using SOFA HRTF.
 
     Uses direct HRIR convolution via h5py (no spaudiopy dependency).
@@ -903,14 +989,7 @@ def foa_to_binaural_sofa(foa_sn3d: np.ndarray, sr: int, sofa_path: str) -> np.nd
                     )[:L_out]
             ir_data = ir_resampled
 
-        def find_nearest_hrir(az_rad: float, el_rad: float) -> np.ndarray:
-            """Find closest HRIR by angular distance. Returns (2, L)."""
-            qx = np.cos(el_rad) * np.cos(az_rad)
-            qy = np.cos(el_rad) * np.sin(az_rad)
-            qz = np.sin(el_rad)
-            dots = src_cart[:, 0] * qx + src_cart[:, 1] * qy + src_cart[:, 2] * qz
-            idx = int(np.argmax(dots))
-            return ir_data[idx]  # (2, L)
+        hrir_lookup = make_hrir_lookup(src_cart, ir_data, mode=hrir_interp)
 
         # --- Virtual speaker decode (8 speakers on cube for order-1) ---
         # Speaker directions: front, back, left, right, up-front, up-back, down-front, down-back
@@ -942,7 +1021,7 @@ def foa_to_binaural_sofa(foa_sn3d: np.ndarray, sr: int, sofa_path: str) -> np.nd
 
             # Get HRIR for this speaker direction
             # SOFA convention: az=0 is front, positive=counterclockwise
-            hrir = find_nearest_hrir(az_spk, el_spk)  # (2, L)
+            hrir = hrir_lookup(az_spk, el_spk)  # (2, L)
 
             # Convolve
             for ch in range(2):
@@ -1224,5 +1303,8 @@ __all__ = [
     "render_baselines_from_trajectory",
     # Distance processing
     "apply_distance_gain_lpf",
+    "make_hrir_lookup",
+    "hrir_barycentric_weights",
+    "HRIR_INTERP_MODES",
     "build_wet_curve_from_dist_occ",
 ]

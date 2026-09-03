@@ -14,7 +14,7 @@ source:
   bridge_repo: /home/seung/mmhoa/spatial_engine-proto
   bridge_commit: aa73561a853af474be2132f5d5c817c76a453738
   adr: /home/seung/mmhoa/spatial_engine-proto/docs/adr/vid2spatial_osc_contract.md
-  adr_repo_commit: 6677542f152615d6ce2e1548fa920afde9a178eb
+  adr_repo_commit: 25e76da647459e996725df98b1a3d9bf86ef81fb
   generator: 'tools/extract_bridge_contract.py (bridge: section only)'
   bridge_ref: fix/lane-bridge-handoff
 notes:

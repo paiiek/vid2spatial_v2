@@ -129,6 +129,15 @@ def main(argv=None) -> int:
     ap.add_argument("--out", required=True)
     ap.add_argument("--device", default="cpu")
     ap.add_argument("--max-frames", type=int, default=200)
+    ap.add_argument("--input-size", type=int, default=518,
+                    help="model input size; lower is cheaper on CPU")
+    ap.add_argument("--threads", type=int, default=4,
+                    help="torch intra-op threads. Default 4: this is a shared box "
+                         "and an unbounded thread pool got the run killed under "
+                         "memory pressure once already.")
+    ap.add_argument("--cache", default=None,
+                    help="per-track disparity cache; the run RESUMES from it, so a "
+                         "kill costs only the frames since the last flush")
     a = ap.parse_args(argv)
 
     labels = Path(a.labels)
@@ -156,21 +165,34 @@ def main(argv=None) -> int:
           f"{sum(len(by_img[n]) for n in have)} tracks", flush=True)
 
     import cv2
-    model = build_model(a.device)
+    import torch
+    torch.set_num_threads(max(1, a.threads))
 
+    cache_path = Path(a.cache) if a.cache else Path(a.out).with_suffix(".cache.json")
     disp, gt = {}, {}
-    for i, name in enumerate(have):
+    if cache_path.exists():
+        c = json.loads(cache_path.read_text())
+        disp, gt = c.get("disp", {}), c.get("gt", {})
+        print(f"resuming from {cache_path}: {len(disp)} tracks already done", flush=True)
+
+    model = build_model(a.device)
+    todo = [n for n in have if any(k not in disp for k, _ in by_img[n])]
+    for i, name in enumerate(todo):
         img = cv2.imread(str(images / name))
         if img is None:
             continue
-        d = model.infer_image(img).astype(np.float64)  # RAW disparity, unnormalised
+        with torch.no_grad():
+            d = model.infer_image(img, a.input_size).astype(np.float64)  # RAW disparity
         for k, r in by_img[name]:
             v = bbox_disparity(d, r["bbox"])
             if np.isfinite(v):
                 disp[k] = v
                 gt[k] = float(r["z"])
-        if (i + 1) % 20 == 0:
-            print(f"  {i+1}/{len(have)} frames", flush=True)
+        del d, img
+        if (i + 1) % 10 == 0:
+            cache_path.write_text(json.dumps({"disp": disp, "gt": gt}))
+            print(f"  {i+1}/{len(todo)} frames ({len(disp)} tracks)", flush=True)
+    cache_path.write_text(json.dumps({"disp": disp, "gt": gt}))
 
     keys = sorted(disp)
     dd = np.array([disp[k] for k in keys])

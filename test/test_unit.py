@@ -1562,6 +1562,25 @@ class TestComposedDepthZ0(unittest.TestCase):
         oracle = m.evaluate_against_gt(gt)
         self.assertIn("proxy term only", oracle["z0_source"])
 
+    def test_composed_report_and_z0_estimates_are_committed(self):
+        """The measured composed result, and its caveat, must stay in the repo."""
+        root = pathlib.Path(__file__).resolve().parent.parent
+        z0 = root / "test/full_eval/depth_z0_dav2_vits.json"
+        rep = root / "reports/depth_composed_kitti_2026-09-04.md"
+        self.assertTrue(z0.exists(), "z0 estimates not committed")
+        self.assertTrue(rep.exists(), "composed report not committed")
+        import json
+        doc = json.loads(z0.read_text())
+        self.assertGreaterEqual(len(doc["z0"]), 200)
+        self.assertIn("relative", doc["model"].lower())
+        body = rep.read_text(encoding="utf-8")
+        # the number, and the caveat that must never travel without it
+        self.assertIn("0.247", body)
+        self.assertIn("0.100", body)
+        self.assertIn("not free metric depth", body.replace("**", ""))
+        self.assertIn("affine", body)
+        self.assertIn("relative", body)
+
     def test_only_tracks_with_an_estimate_are_scored(self):
         m = self._tool()
         repo = pathlib.Path(__file__).resolve().parent.parent

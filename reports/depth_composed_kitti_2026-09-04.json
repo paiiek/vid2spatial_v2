@@ -1,0 +1,80 @@
+{
+  "oracle_same_tracks": {
+    "n": 13485,
+    "n_tracks": 225,
+    "abs_rel": 0.10038205022367903,
+    "delta1": 0.8702261772339637,
+    "mae_m": 2.546484480299506,
+    "spearman": 0.9836341179862037,
+    "track_median_spearman": 0.9989468864468863
+  },
+  "composed": {
+    "n": 13485,
+    "n_tracks": 225,
+    "mae_m": 6.4146620520609074,
+    "abs_rel": 0.24691408779597582,
+    "delta1": 0.4843159065628476,
+    "spearman": 0.8956653802864258,
+    "track_median_mae_m": 5.624359058418659,
+    "track_median_abs_rel": 0.22136946330932447,
+    "track_median_spearman": 0.9989468864468863,
+    "track_frac_spearman_gt_0_5": 0.9688888888888889,
+    "gt_file": "/home/seung/mmhoa/vid2spatial_v2-wt-plumb/test/full_eval/depth_gt.json",
+    "z0_source": "estimated (composed error)",
+    "bbox_area_drel_spearman": 0.8694782935370932,
+    "bbox_area_drel_saturated_frac": 0.09670003707823507,
+    "bbox_area_drel_mae_vs_logdist_target": 0.3090309922330612,
+    "bbox_area_log_drel_mae_vs_logdist_target": 0.11267584860034839,
+    "bbox_area_log_drel_saturated_frac": 0.09670003707823507,
+    "by_type": {
+      "Car": {
+        "n_tracks": 133,
+        "median_abs_rel": 0.2291318163616245,
+        "median_spearman": 0.9998658618376928
+      },
+      "Cyclist": {
+        "n_tracks": 19,
+        "median_abs_rel": 0.19558549620962068,
+        "median_spearman": 0.9999497704280241
+      },
+      "Pedestrian": {
+        "n_tracks": 57,
+        "median_abs_rel": 0.21358285753710085,
+        "median_spearman": 0.9857558183098801
+      },
+      "Person": {
+        "n_tracks": 3,
+        "median_abs_rel": 0.016795510200131123,
+        "median_spearman": 1.0
+      },
+      "Tram": {
+        "n_tracks": 1,
+        "median_abs_rel": 0.4051965917966998,
+        "median_spearman": 1.0
+      },
+      "Truck": {
+        "n_tracks": 2,
+        "median_abs_rel": 0.2069240227658727,
+        "median_spearman": 0.9986613592805543
+      },
+      "Van": {
+        "n_tracks": 10,
+        "median_abs_rel": 0.1994749283292183,
+        "median_spearman": 0.9994214785976798
+      }
+    }
+  },
+  "z0": {
+    "model": "Depth Anything V2 ViT-S (relative), /home/seung/Depth-Anything-V2/checkpoints/depth_anything_v2_vits.pth",
+    "alignment": {
+      "form": "1/z = a*disparity + b, one global fit over all tracks",
+      "a": 0.022749441848894554,
+      "b": 0.008150253984792286,
+      "note": "NOT metric depth from the model; a global affine fitted against the GT once, the standard affine-invariant protocol. It replaces a per-track oracle z0 with two dataset-wide numbers."
+    },
+    "n_tracks": 225,
+    "z0_abs_rel_mean": 0.22987725754798208,
+    "z0_abs_rel_median": 0.20181804624067717,
+    "z0_delta1": 0.5288888888888889
+  }
+}

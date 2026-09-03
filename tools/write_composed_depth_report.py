@@ -43,6 +43,7 @@ def main(argv=None) -> int:
 
     # the SAME tracks with the ORACLE calibration, so the two rows are comparable
     import numpy as np
+    from verify_depth_heuristic import _spearman
     recs = json.loads(gt.read_text())
     groups: dict[str, list] = {}
     for r in recs:
@@ -62,11 +63,15 @@ def main(argv=None) -> int:
     e = np.concatenate(err)
     gg = np.concatenate(gts)
     pp = np.concatenate(prox)
+    tr_sp = np.array([s for s in (
+        _spearman(np.array(p), np.array(g)) for p, g in zip(prox, gts)) if np.isfinite(s)])
     oracle = {
         "n": int(len(gg)), "n_tracks": len(err),
         "abs_rel": float(np.mean(e / np.maximum(gg, 1e-6))),
         "delta1": float(np.mean(np.maximum(pp / gg, gg / pp) < 1.25)),
         "mae_m": float(e.mean()),
+        "spearman": _spearman(pp, gg),
+        "track_median_spearman": float(np.median(tr_sp)) if len(tr_sp) else None,
     }
 
     z0a = z0doc.get("alignment", {})
@@ -94,8 +99,8 @@ def main(argv=None) -> int:
         "",
         "The checkpoint available on this machine is the **relative** Depth Anything V2",
         "ViT-S model, not a metric one, so it cannot output metres. A single global",
-        f"affine `{z0a.get('form', '1/z = a*disparity + b')}` is fitted **once** over all",
-        f"tracks (a = {z0a.get('a')}, b = {z0a.get('b')}) and applied to every track.",
+        "affine `1/z = a·disparity + b` is fitted **once** over all tracks",
+        f"(a = {z0a.get('a'):.6g}, b = {z0a.get('b'):.6g}) and applied to every track.",
         "",
         "That is the standard affine-invariant protocol and it is strictly weaker than",
         "the per-track oracle it replaces — two dataset-wide numbers instead of one exact",
@@ -107,14 +112,16 @@ def main(argv=None) -> int:
         "",
         "## Results",
         "",
-        "| Calibration `z0` | AbsRel | δ1 | MAE (m) | records | tracks |",
+        "| Calibration `z0` | AbsRel | δ1 | MAE (m) | pooled Spearman | median per-track Spearman |",
         "|---|---|---|---|---|---|",
         f"| Ground truth (proxy term only) | {fmt(oracle['abs_rel'])} | "
-        f"{fmt(oracle['delta1'])} | {fmt(oracle['mae_m'], 2)} | {oracle['n']} | "
-        f"{oracle['n_tracks']} |",
+        f"{fmt(oracle['delta1'])} | {fmt(oracle['mae_m'], 2)} | {fmt(oracle['spearman'])} | "
+        f"{fmt(oracle['track_median_spearman'])} |",
         f"| **Depth model estimate (composed)** | **{fmt(composed['abs_rel'])}** | "
-        f"**{fmt(composed['delta1'])}** | {fmt(composed['mae_m'], 2)} | {composed['n']} | "
-        f"{composed['n_tracks']} |",
+        f"**{fmt(composed['delta1'])}** | {fmt(composed['mae_m'], 2)} | "
+        f"{fmt(composed['spearman'])} | {fmt(composed['track_median_spearman'])} |",
+        "",
+        f"Both rows: {composed['n']} records over {composed['n_tracks']} tracks.",
         "",
         f"The `z0` estimate itself: AbsRel {fmt(z0doc.get('z0_abs_rel_mean'))} mean, "
         f"{fmt(z0doc.get('z0_abs_rel_median'))} median, δ1 {fmt(z0doc.get('z0_delta1'))}, "
@@ -125,9 +132,22 @@ def main(argv=None) -> int:
         "The proxy is `z = z0·sqrt(A0/A)`, so a `z0` error is a pure **scale** error on",
         "the whole track: it cannot be recovered later and it compounds with the proxy's",
         "own error rather than averaging against it. That is why the composed AbsRel is",
-        "close to the sum of the two terms and not to either one alone, and why the",
-        "ordering-based metrics are unaffected — Spearman and every ranking result in",
-        "DEPTH_GT_KITTI_RESULTS.md are invariant to the scale and remain valid as stated.",
+        "close to the sum of the two terms rather than to either one alone.",
+        "",
+        "The ordering metrics split in a way worth being precise about, because it is",
+        "easy to overclaim here:",
+        "",
+        f"- **Per-track** Spearman is *exactly* unchanged, {fmt(oracle['track_median_spearman'])} "
+        f"median either way — verified, maximum absolute",
+        "  difference across all tracks is 0.0. A single scale factor per track cannot",
+        "  reorder that track's own depths. Every within-track ranking statement in",
+        "  DEPTH_GT_KITTI_RESULTS.md survives the switch to an estimated `z0` untouched.",
+        f"- **Pooled** Spearman does drop, from {fmt(oracle['spearman'])} to "
+        f"{fmt(composed['spearman'])} on these same tracks (the full 294-track figure "
+        "quoted in DEPTH_GT_KITTI_RESULTS.md is 0.982). It is computed across all",
+        "  tracks at once, and each track now carries a *different* scale error, so the",
+        "  cross-track ordering is genuinely shuffled. Pooled ranking claims do not",
+        "  survive; per-track ones do.",
         "",
         "For the renderer, the practical consequence is bounded: `d_rel` is a normalised",
         "0–1 quantity, so a scale error moves material along the loudness curve rather",

@@ -94,8 +94,23 @@ objective metric settles whether the new mapping sounds right.
 ## I8 — Depth accuracy is reported for the proxy, not the deployed chain
 
 `test/full_eval/DEPTH_GT_KITTI_RESULTS.md` isolates the bbox-area proxy term
-with an oracle `z0`. See `reports/depth_composed_kitti_2026-09-04.md` for the
-composed number and the alignment caveat that comes with it.
+with an oracle `z0`. The composed number, with `z0` estimated by Depth Anything
+V2 ViT-S over the same 225 tracks:
+
+| Calibration `z0` | AbsRel | δ1 |
+|---|---|---|
+| Ground truth (proxy only) | 0.100 | 0.870 |
+| Depth model estimate (composed) | 0.247 | 0.484 |
+
+Per-track Spearman is exactly unchanged (0.999 median); pooled Spearman falls
+from 0.984 to 0.896 because each track picks up a different scale error.
+
+**Still open.** The checkpoint on this machine is the RELATIVE ViT-S model, so
+metres come from a single global affine fitted once against the ground truth,
+not from the model. The composed figure is therefore optimistic relative to a
+deployment with no ground truth at all. A metric backend (Metric3D v2, or a
+Depth-Anything metric checkpoint) would remove the fit. Full detail and the
+reproduce steps: `reports/depth_composed_kitti_2026-09-04.md`.
 
 ---
 

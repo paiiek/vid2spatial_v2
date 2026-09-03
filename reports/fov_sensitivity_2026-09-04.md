@@ -10,7 +10,7 @@ trajectory JSON as `intrinsics.fov_source`. The default is still 60°, and it is
 now accompanied by a loud warning.
 
 Reference lenses, for scale: a 27 mm phone lens is 67.4° h-FOV, a 50 mm is
-39.6°, and the KITTI colour camera is 81.7°.
+39.6°, and the KITTI colour camera is 81.52°.
 
 ## 1. Systematic azimuth shift from the assumption alone
 
@@ -41,16 +41,16 @@ than the whole reported PixelAzMAE of 1.36°.
 
 | assumed FOV (°) | AzMAE (°) |
 |---|---|
-| 40.0 | 7.011 |
-| 45.0 | 6.234 |
-| 50.0 | 5.442 |
-| 55.0 | 4.632 |
-| **60.0 (deployed)** | **3.807** |
-| 65.0 | 2.968 |
-| 70.0 | 2.123 |
-| 75.0 | 1.342 |
-| 80.0 | 0.963 |
-| 81.70 (true) | 1.042 † |
+| 40.0 | 7.001 |
+| 45.0 | 6.222 |
+| 50.0 | 5.427 |
+| 55.0 | 4.615 |
+| **60.0 (deployed)** | **3.785** |
+| 65.0 | 2.938 |
+| 70.0 | 2.084 |
+| 75.0 | 1.282 |
+| 80.0 | 0.851 |
+| 81.52 (true) | 0.908 † |
 
 † the `truefov` variant in `reports/azimuth_kitti_2026-09-04.md`, which uses the
 per-sequence focal length rather than a single swept value.
@@ -67,6 +67,8 @@ the check that the metric is measuring geometry and not the tracker.
 5. `ffprobe` stream/format tags (FOV, 35 mm-equivalent, focal length in px) → `"metadata:ffprobe"`
 6. 60° with a `[WARN]` line → `"default"`
 
-Neither `ffprobe` nor `exiftool` is installed on this machine, so every local run
-resolves to `default` today and the numeric behaviour is unchanged. The parsers
-are unit-tested against captured tool output rather than against the binaries.
+`fov_from_metadata` is **off by default**, so the resolver is not consulted at
+all unless a caller opts in; and neither `ffprobe` nor `exiftool` is installed on
+this machine, so even with it on, every local run resolves to `default` today.
+The numeric behaviour of an existing pipeline is unchanged either way. The
+parsers are unit-tested against captured tool output rather than the binaries.

@@ -3,7 +3,6 @@ Spatial audio pipeline orchestration.
 """
 import json
 import os
-from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 
 import librosa
@@ -255,8 +254,11 @@ class SpatialAudioPipeline:
             intr = traj.setdefault("intrinsics", {})
             intr.setdefault("fov_deg", self.config.vision.camera.fov_deg)
             intr.setdefault("fov_source", "trajectory_json")
+            intr.setdefault("fov_detail", str(self.config.trajectory_json))
             self.config.vision.camera.fov_deg = float(intr["fov_deg"])
             self.config.vision.camera.fov_source = str(intr["fov_source"])
+            self.config.vision.camera.fov_detail = str(intr["fov_detail"])
+            intr["motion_mode"] = self.config.vision.camera.motion_mode
             traj = self._apply_camera_motion(traj)
 
             # Save post-processed trajectory to output path (if requested)
@@ -434,6 +436,12 @@ class SpatialAudioPipeline:
             else:
                 traj['fps'] = 30.0
 
+        # Same provenance and camera-motion treatment as the V2 tracker path;
+        # the legacy fallback must not produce a trajectory that is missing
+        # them (2026-09-04 review, MEDIUM).
+        traj = self._stamp_intrinsics(traj)
+        traj = self._apply_camera_motion(traj)
+
         # Save if requested
         if self.config.output.trajectory_path:
             print(f'[info] Saving trajectory to {self.config.output.trajectory_path}')
@@ -473,7 +481,7 @@ class SpatialAudioPipeline:
         # Try PRA backend
         if self.config.room.backend in ("auto", "pra"):
             try:
-                from .irgen import synthesize_mono_rir, fft_convolve
+                from .irgen import synthesize_mono_rir
                 print('[info] Synthesizing room IR with pyroomacoustics...')
                 rir = synthesize_mono_rir(
                     (Lx, Ly, Lz),

@@ -42,7 +42,7 @@ Video / Sketch
 | Metric | Value |
 |---|---|
 | Tracking (22 LaSOT clips, PixelAzMAE) | **1.36° ± 1.75°** (median 0.70°) |
-| Geometry (21 819 KITTI detections, AzMAE vs 3D labels) | **3.81°** (0.41° with true intrinsics) |
+| Geometry (21 819 KITTI detections, AzMAE vs 3D labels) | **3.79°** (0.41° with true intrinsics) |
 | vs. ByteTrack baseline | −72% |
 | Perceptual study N=20, p | ≤ 0.025 (Friedman) |
 | Efficiency study N=12, time reduction | 41–49% |
@@ -53,7 +53,7 @@ Video / Sketch
 > projection cancels and the number is a monotone reparameterisation of bbox-centre
 > pixel error. The independent geometry check is `tools/eval_azimuth_kitti.py`, which
 > takes ground truth from KITTI 3D label centres (`atan2(x_cam, z_cam)`): the deployed
-> 60° assumption costs **3.81° AzMAE**, dropping to 0.41° with the true intrinsics.
+> 60° assumption costs **3.79° AzMAE**, dropping to 0.41° with the true intrinsics.
 > See `reports/azimuth_kitti_2026-09-04.md`.
 
 ### Render options added 2026-09-04 (all opt-in)

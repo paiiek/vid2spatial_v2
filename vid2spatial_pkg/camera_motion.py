@@ -31,7 +31,26 @@ world stays put while the camera moves:
 `mode="camera_frame"` (the default) leaves the trajectory untouched and only
 records the yaw series, so existing renders are bit-identical.
 
-Everything here is CPU-only; the estimator runs at roughly 5 ms/frame at 720p.
+Everything here is CPU-only; the estimator runs at roughly 12 ms/frame on LaSOT
+image sequences including JPEG decode (tools/measure_camera_motion.py).
+
+LIMITS -- read before trusting a world_frame render
+---------------------------------------------------
+* **Drift.** Yaw is an accumulated sum of per-frame increments with no loop
+  closure and no absolute reference, so error integrates. A residual bias of
+  0.01 deg/frame is 3 deg over a 300-frame clip. It is fit for a clip-length
+  pan, not for a long take.
+* **Rotation only.** A global 2-D translation is read as pure yaw/pitch. A
+  camera that *dollies* sideways produces the same image translation, and is
+  wrongly attributed to rotation; the error grows as the scene gets closer.
+  Rolling and zooming are estimated but discarded.
+* **Depth parallax.** A single global transform cannot represent a scene at
+  several depths. With a large foreground object the RANSAC consensus may lock
+  onto the object rather than the background, in which case the yaw tracks the
+  object and world_frame makes matters worse, not better.
+* **Low texture.** Below MIN_INLIERS reliable correspondences the increment is
+  held at zero rather than guessed, so yaw silently stops accumulating across
+  a featureless stretch.
 """
 from __future__ import annotations
 
@@ -240,16 +259,29 @@ def apply_motion_mode(az_rad: Sequence[float], el_rad: Sequence[float],
         return az, el
     if mode != MODE_WORLD_FRAME:
         raise ValueError(f"unknown motion mode {mode!r}; expected one of {VALID_MODES}")
-    yaw = _match_length(motion.yaw_rad, len(az))
-    pitch = _match_length(motion.pitch_rad, len(el))
+    yaw = _match_length(motion.yaw_rad, len(az), what="yaw series")
+    pitch = _match_length(motion.pitch_rad, len(el), what="pitch series",
+                          warn=False)
     return az + yaw, el + pitch
 
 
-def _match_length(series: np.ndarray, n: int) -> np.ndarray:
+def _match_length(series: np.ndarray, n: int, *, what: str = "camera motion",
+                  warn: bool = True) -> np.ndarray:
+    """Align a motion series to `n` trajectory entries.
+
+    A length mismatch means the estimator and the tracker sampled the video at
+    different strides, and the yaw applied to frame k is then not the yaw
+    measured at frame k. Truncating or holding keeps the render alive, but it is
+    a real misalignment and it gets a warning rather than passing silently.
+    """
     if series.size == 0:
         return np.zeros(n, dtype=np.float64)
     if series.size == n:
         return series
+    if warn:
+        print(f"[warn] {what}: estimator produced {series.size} samples for "
+              f"{n} trajectory frames — stride mismatch, angles will be "
+              f"misaligned. Pass the same sample_stride to both.")
     if series.size > n:
         return series[:n]
     return np.concatenate([series, np.full(n - series.size, series[-1])])
@@ -279,8 +311,9 @@ def annotate_trajectory_with_camera_motion(traj: Dict[str, Any], video_path: str
 
     az = [float(f.get("az", 0.0)) for f in frames]
     el = [float(f.get("el", 0.0)) for f in frames]
-    yaw = _match_length(motion.yaw_rad, len(frames))
-    pitch = _match_length(motion.pitch_rad, len(frames))
+    yaw = _match_length(motion.yaw_rad, len(frames), what="camera yaw")
+    pitch = _match_length(motion.pitch_rad, len(frames), what="camera pitch",
+                          warn=False)
     for f, y, p in zip(frames, yaw, pitch):
         f["camera_yaw_deg"] = float(math.degrees(y))
         f["camera_pitch_deg"] = float(math.degrees(p))

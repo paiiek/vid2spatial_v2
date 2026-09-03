@@ -68,10 +68,26 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-# KITTI Tracking colour camera is 1242x375 for most sequences (a few are
-# 1224x370 / 1238x374).  The repo's own KITTI tooling uses the same constant
-# (tools/build_depth_gt_kitti.py).
+# KITTI Tracking image width, per sequence. The colour camera is 1242x375 for
+# most of the 21 training sequences, but four are narrower and one is wider, and
+# the width sets both the principal point the repo assumes (W/2) and the focal
+# length implied by an assumed FOV. Using a single constant mis-places the
+# assumed principal point by up to 9 px on those sequences.
+# (tools/build_depth_gt_kitti.py uses a single 1242 constant because it works on
+# an area FRACTION, where a <1 % width difference is irrelevant.)
 DEFAULT_WIDTH = 1242
+SEQ_WIDTH = {
+    "0000": 1242, "0001": 1242, "0002": 1242, "0003": 1242, "0004": 1242,
+    "0005": 1242, "0006": 1242, "0007": 1242, "0008": 1242, "0009": 1242,
+    "0010": 1242, "0011": 1242, "0012": 1242, "0013": 1242,
+    "0014": 1224, "0015": 1224, "0016": 1224, "0017": 1224,
+    "0018": 1238, "0019": 1238,
+    "0020": 1241,
+}
+
+
+def width_for(seq: str, default: int = DEFAULT_WIDTH) -> int:
+    return SEQ_WIDTH.get(str(seq), default)
 SKIP_TYPES = {"DontCare", "Misc"}
 
 
@@ -138,21 +154,26 @@ def _circ_abs_deg(a: np.ndarray, b: np.ndarray) -> np.ndarray:
 
 
 def evaluate(records: List[Dict], calibs: Dict[str, Dict[str, float]],
-             *, width: int, repo_fov_deg: float) -> Dict:
+             *, width: int, repo_fov_deg: float,
+             per_sequence_width: bool = True) -> Dict:
     cx_px = np.array([r["cx_px"] for r in records], dtype=np.float64)
     x_cam = np.array([r["x_cam"] for r in records], dtype=np.float64)
     z_cam = np.array([r["z_cam"] for r in records], dtype=np.float64)
     fx = np.array([calibs[r["seq"]]["fx"] for r in records], dtype=np.float64)
     ppx = np.array([calibs[r["seq"]]["cx"] for r in records], dtype=np.float64)
+    # per-sequence width: it sets the assumed principal point AND the focal
+    # length a given FOV implies, so a single constant biases four sequences
+    W = (np.array([width_for(r["seq"], width) for r in records], dtype=np.float64)
+         if per_sequence_width else np.full(len(records), float(width)))
 
     az_gt = np.degrees(np.arctan2(x_cam, z_cam))
 
-    f_repo = fov_to_focal_px(repo_fov_deg, width)
-    az_repo = np.degrees(np.arctan2(cx_px - width / 2.0, f_repo))
+    f_repo = (W / 2.0) / math.tan(math.radians(repo_fov_deg) / 2.0)
+    az_repo = np.degrees(np.arctan2(cx_px - W / 2.0, f_repo))
 
     # FOV implied by the true intrinsics, principal point still assumed centred
-    true_fov = np.array([focal_px_to_fov(v, width) for v in fx])
-    az_truefov = np.degrees(np.arctan2(cx_px - width / 2.0, fx))
+    true_fov = np.degrees(2.0 * np.arctan((W / 2.0) / fx))
+    az_truefov = np.degrees(np.arctan2(cx_px - W / 2.0, fx))
 
     # Full true intrinsics (fx and real principal point)
     az_calib = np.degrees(np.arctan2((cx_px - ppx) / fx, 1.0))
@@ -162,6 +183,8 @@ def evaluate(records: List[Dict], calibs: Dict[str, Dict[str, float]],
         "n_tracks": int(len({r["track"] for r in records})),
         "n_sequences": int(len({r["seq"] for r in records})),
         "width_px": width,
+        "per_sequence_width": bool(per_sequence_width),
+        "widths_used": sorted({int(v) for v in W}),
         "repo_fov_deg": repo_fov_deg,
         "true_fov_deg_mean": float(np.mean(true_fov)),
         "variants": {},
@@ -190,15 +213,18 @@ def evaluate(records: List[Dict], calibs: Dict[str, Dict[str, float]],
     return out
 
 
-def fov_sweep(records: List[Dict], *, width: int, fovs: List[float]) -> List[Dict]:
+def fov_sweep(records: List[Dict], *, width: int, fovs: List[float],
+              per_sequence_width: bool = True) -> List[Dict]:
     cx_px = np.array([r["cx_px"] for r in records], dtype=np.float64)
     x_cam = np.array([r["x_cam"] for r in records], dtype=np.float64)
     z_cam = np.array([r["z_cam"] for r in records], dtype=np.float64)
+    W = (np.array([width_for(r["seq"], width) for r in records], dtype=np.float64)
+         if per_sequence_width else np.full(len(records), float(width)))
     az_gt = np.degrees(np.arctan2(x_cam, z_cam))
     rows = []
     for fov in fovs:
-        f = fov_to_focal_px(fov, width)
-        az = np.degrees(np.arctan2(cx_px - width / 2.0, f))
+        f = (W / 2.0) / math.tan(math.radians(fov) / 2.0)
+        az = np.degrees(np.arctan2(cx_px - W / 2.0, f))
         rows.append({"fov_deg": fov, "azmae_deg": float(np.mean(_circ_abs_deg(az, az_gt)))})
     return rows
 
@@ -208,7 +234,11 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--labels", default=str(REPO_ROOT / "data/kitti_tracking/label_02"))
     ap.add_argument("--calib", default=str(REPO_ROOT / "data/kitti_tracking/calib"))
-    ap.add_argument("--width", type=int, default=DEFAULT_WIDTH)
+    ap.add_argument("--width", type=int, default=DEFAULT_WIDTH,
+                    help="fallback width for a sequence not in SEQ_WIDTH")
+    ap.add_argument("--single-width", action="store_true",
+                    help="use --width for every sequence instead of the "
+                         "per-sequence table")
     ap.add_argument("--repo-fov", type=float, default=60.0,
                     help="the FOV the pipeline assumes (config.CameraConfig.fov_deg)")
     ap.add_argument("--max-z", type=float, default=80.0)
@@ -246,16 +276,19 @@ def main() -> int:
         print("[err] no records after filtering")
         return 2
 
-    res = evaluate(records, calibs, width=args.width, repo_fov_deg=args.repo_fov)
+    res = evaluate(records, calibs, width=args.width, repo_fov_deg=args.repo_fov,
+                   per_sequence_width=not args.single_width)
     sweep = []
     if args.fov_sweep.strip():
         sweep = fov_sweep(records, width=args.width,
-                          fovs=[float(v) for v in args.fov_sweep.split(",")])
+                          fovs=[float(v) for v in args.fov_sweep.split(",")],
+                          per_sequence_width=not args.single_width)
         res["fov_sweep"] = sweep
 
     v = res["variants"]
     print(f"records={res['n_records']}  tracks={res['n_tracks']}  seqs={res['n_sequences']}")
-    print(f"true KITTI h-FOV (from P2, W={args.width}) = {res['true_fov_deg_mean']:.2f} deg")
+    print(f"widths used: {res['widths_used']}")
+    print(f"true KITTI h-FOV (from P2) = {res['true_fov_deg_mean']:.2f} deg")
     for name in ("repo", "truefov", "calib"):
         d = v[name]
         print(f"  {name:8s} AzMAE={d['azmae_deg']:6.3f} deg  median={d['median_deg']:6.3f}  "
@@ -297,7 +330,7 @@ def render_markdown(res: Dict) -> str:
         f"- {res['n_records']} object detections, {res['n_tracks']} tracks, "
         f"{res['n_sequences']} sequences (KITTI Tracking `label_02`).",
         "- Clean objects only: `occluded == 0`, `truncated == 0`, depth in [1, 80] m.",
-        f"- Assumed image width {res['width_px']} px; pipeline FOV "
+        f"- Per-sequence image widths {res['widths_used']} px; pipeline FOV "
         f"{res['repo_fov_deg']:.1f} deg (`config.CameraConfig.fov_deg`).",
         f"- True KITTI colour-camera h-FOV from the P2 intrinsics: "
         f"**{res['true_fov_deg_mean']:.2f} deg**.",

@@ -16,20 +16,20 @@ from the KITTI label: `az_gt = atan2(x_cam, z_cam)`. No projection assumption.
 ## Setup
 
 - 21819 object detections, 649 tracks, 21 sequences (KITTI Tracking `label_02`).
-- Clean objects only: `occluded == 0`, `truncated == 0`, depth in range [1, 80] m.
-- Assumed image width 1242 px; pipeline FOV 60.0 deg (`config.CameraConfig.fov_deg`).
-- True KITTI colour-camera h-FOV from the P2 intrinsics: **81.70 deg**.
+- Clean objects only: `occluded == 0`, `truncated == 0`, depth in [1, 80] m.
+- Per-sequence image widths [1224, 1238, 1241, 1242] px; pipeline FOV 60.0 deg (`config.CameraConfig.fov_deg`).
+- True KITTI colour-camera h-FOV from the P2 intrinsics: **81.52 deg**.
 
 ## Result
 
 | variant | what it assumes | AzMAE (deg) | median | p90 | signed bias |
 |---|---|---|---|---|---|
-| `repo` | bbox centre + hardcoded 60 deg FOV (**the deployed pipeline**) | **3.807** | 3.128 | 8.420 | -0.118 |
-| `truefov` | bbox centre + true focal length, principal point assumed centred | **1.042** | 0.921 | 1.641 | -0.945 |
+| `repo` | bbox centre + hardcoded 60 deg FOV (**the deployed pipeline**) | **3.785** | 3.176 | 8.415 | -0.028 |
+| `truefov` | bbox centre + true focal length, principal point assumed centred | **0.908** | 0.832 | 1.488 | -0.806 |
 | `calib` | bbox centre + full true intrinsics (fx and real principal point) | **0.412** | 0.171 | 1.013 | +0.140 |
 
-- The honest deployed error is **3.81 deg**, not ~1.4 deg.
-- Correcting only the FOV assumption takes it to 1.04 deg, i.e. the hardcoded 60 deg costs +2.76 deg of AzMAE.
+- The honest deployed error is **3.78 deg**, not ~1.4 deg.
+- Correcting only the FOV assumption takes it to 0.91 deg, i.e. the hardcoded 60 deg costs +2.88 deg of AzMAE.
 - With full true intrinsics the residual is 0.41 deg. That
   residual is irreducible here: it is the mismatch between the 2D bbox centre and
   the projection of the 3D object centre, which no intrinsics fix removes.
@@ -38,24 +38,24 @@ from the KITTI label: `az_gt = atan2(x_cam, z_cam)`. No projection assumption.
 
 | assumed FOV (deg) | AzMAE (deg) |
 |---|---|
-| 40.0 | 7.011 |
-| 45.0 | 6.234 |
-| 50.0 | 5.442 |
-| 55.0 | 4.632 |
-| 60.0 | 3.807 |
-| 65.0 | 2.968 |
-| 70.0 | 2.123 |
-| 75.0 | 1.342 |
-| 80.0 | 0.963 |
+| 40.0 | 7.001 |
+| 45.0 | 6.222 |
+| 50.0 | 5.427 |
+| 55.0 | 4.615 |
+| 60.0 | 3.785 |
+| 65.0 | 2.938 |
+| 70.0 | 2.084 |
+| 75.0 | 1.282 |
+| 80.0 | 0.851 |
 
 ## Per-class breakdown (deployed `repo` variant)
 
 | class | n | AzMAE (deg) |
 |---|---|---|
-| Car | 11817 | 3.128 |
-| Pedestrian | 7257 | 4.948 |
-| Cyclist | 1193 | 4.126 |
-| Van | 730 | 4.293 |
-| Truck | 582 | 1.317 |
-| Person | 124 | 7.444 |
+| Car | 11817 | 3.126 |
+| Pedestrian | 7257 | 4.885 |
+| Cyclist | 1193 | 4.127 |
+| Van | 730 | 4.282 |
+| Truck | 582 | 1.318 |
+| Person | 124 | 7.420 |
 | Tram | 116 | 3.930 |

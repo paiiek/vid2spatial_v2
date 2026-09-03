@@ -725,3 +725,172 @@ class TestDefaultRenderInvariance:
         # and the default is the one that matches the golden
         assert ref["sections"]["prep::depth_rel::audio"]["abs_max"] == pytest.approx(
             float(np.max(np.abs(off))), rel=1e-6)
+
+
+# ---------------------------------------------------------------------------
+# 2026-09-04 review follow-ups
+# ---------------------------------------------------------------------------
+class TestReviewFollowUps:
+    def test_kitti_per_sequence_widths(self):
+        ek = _load_tool("eval_azimuth_kitti")
+        assert ek.width_for("0000") == 1242
+        assert ek.width_for("0014") == 1224
+        assert ek.width_for("0018") == 1238
+        assert ek.width_for("0020") == 1241
+        assert ek.width_for("9999") == ek.DEFAULT_WIDTH
+        assert len(ek.SEQ_WIDTH) == 21
+
+    def test_per_sequence_width_changes_the_answer(self):
+        ek = _load_tool("eval_azimuth_kitti")
+        labels = REPO_ROOT / "data/kitti_tracking/label_02"
+        calib = REPO_ROOT / "data/kitti_tracking/calib"
+        if not labels.is_dir() or not calib.is_dir():
+            pytest.skip("KITTI tracking labels/calib not on disk")
+        records, calibs = [], {}
+        for lp in sorted(labels.glob("*.txt")):
+            cp = calib / lp.name
+            if not cp.exists():
+                continue
+            calibs[lp.stem] = ek.read_calib(cp)
+            records.extend(ek.parse_sequence(lp))
+        per = ek.evaluate(records, calibs, width=1242, repo_fov_deg=60.0,
+                          per_sequence_width=True)
+        one = ek.evaluate(records, calibs, width=1242, repo_fov_deg=60.0,
+                          per_sequence_width=False)
+        assert per["widths_used"] == [1224, 1238, 1241, 1242]
+        assert one["widths_used"] == [1242]
+        assert per["variants"]["repo"]["azmae_deg"] != pytest.approx(
+            one["variants"]["repo"]["azmae_deg"])
+        # the committed report numbers
+        assert per["variants"]["repo"]["azmae_deg"] == pytest.approx(3.785, abs=0.01)
+        assert per["variants"]["truefov"]["azmae_deg"] == pytest.approx(0.908, abs=0.01)
+        assert per["variants"]["calib"]["azmae_deg"] == pytest.approx(0.412, abs=0.01)
+
+    def test_iso9613_table_is_the_20c_50rh_reference(self):
+        from vid2spatial_pkg.foa_render import (
+            ISO9613_ALPHA_DB_PER_KM, ISO9613_FREQ_HZ)
+        want = {1000.0: 4.66, 2000.0: 9.89, 4000.0: 29.67, 8000.0: 105.29}
+        for f, a in want.items():
+            i = int(np.argmin(np.abs(ISO9613_FREQ_HZ - f)))
+            assert ISO9613_ALPHA_DB_PER_KM[i] == pytest.approx(a)
+        assert np.all(np.diff(ISO9613_ALPHA_DB_PER_KM) > 0)
+
+    def test_vectorised_onepole_matches_the_scalar_loop(self):
+        from vid2spatial_pkg.foa_render import _timevarying_onepole
+        sr, T = 16000, 16000
+        rng = np.random.default_rng(5)
+        x = (rng.standard_normal(T) * 0.2).astype(np.float32)
+        # the production contract: fc arrives box-smoothed over 0.5 s, so the
+        # block approximation is tested against a control of that bandwidth
+        from scipy.ndimage import uniform_filter1d
+        fc = uniform_filter1d(np.linspace(8000.0, 2000.0, T),
+                              size=int(sr * 0.5), mode="nearest").astype(np.float32)
+        ref = np.zeros(T, dtype=np.float32)
+        prev = 0.0
+        for i in range(T):
+            a = (2 * np.pi * fc[i]) / (2 * np.pi * fc[i] + sr)
+            prev = prev + a * (x[i] - prev)
+            ref[i] = prev
+        got = _timevarying_onepole(x, fc, sr)
+        rms = float(np.sqrt(np.mean(ref ** 2)))
+        assert float(np.max(np.abs(ref - got))) < 0.02 * rms
+
+    def test_doppler_tail_fades_instead_of_holding_dc(self):
+        from vid2spatial_pkg.foa_render import apply_doppler
+        sr = 16000
+        t = np.arange(sr, dtype=np.float64) / sr
+        x = (np.sin(2 * np.pi * 300 * t) + 1.0).astype(np.float32)  # DC offset
+        # steady APPROACH at the clamp: rate > 1, so the read pointer advances
+        # faster than the output is written and runs off the end of the input
+        dist = (200.0 - 120.0 * t).astype(np.float32)
+        y = apply_doppler(x, sr, dist, max_ratio=0.25)
+        assert y.shape == x.shape
+        assert np.all(np.isfinite(y))
+        # the run-off region must be silent, not a held DC level
+        assert abs(float(y[-1])) < 1e-6
+        tail = y[-int(0.05 * sr):]
+        assert float(np.max(np.abs(tail))) < 0.05
+
+    def test_build_lost_curves_tolerates_a_missing_frame_key(self):
+        from vid2spatial_pkg.foa_render import build_lost_curves
+        frames = [{"az": 0.0, "el": 0.0, "confidence": 0.2 if 5 <= i < 9 else 1.0}
+                  for i in range(20)]
+        duck, diffuse = build_lost_curves(frames, 8000, 8000, 25.0)
+        assert duck.shape == (8000,)
+        assert duck.min() < 0.5 and diffuse.max() > 0.2
+
+    def test_match_length_warns_on_stride_mismatch(self, capsys):
+        from vid2spatial_pkg.camera_motion import _match_length
+        out = _match_length(np.zeros(50), 100, what="camera yaw")
+        assert out.shape == (100,)
+        assert "stride mismatch" in capsys.readouterr().out
+
+    def test_camera_cli_args_reach_world_frame(self):
+        import argparse
+        from vid2spatial_pkg.config import (
+            add_camera_cli_args, add_render_cli_args)
+        ap = argparse.ArgumentParser()
+        add_camera_cli_args(ap)
+        add_render_cli_args(ap)
+        default = ap.parse_args([])
+        assert default.motion_mode == "camera_frame"
+        assert default.fov_from_metadata is False
+        assert default.focal_35mm is None
+        assert default.hrir_interp == "nearest"
+        assert default.confidence_gate is False
+        assert default.doppler is False
+        opted = ap.parse_args(["--motion-mode", "world_frame", "--focal-35mm", "27",
+                               "--fov-from-metadata", "--confidence-gate",
+                               "--hrir-interp", "barycentric", "--doppler"])
+        assert opted.motion_mode == "world_frame"
+        assert opted.focal_35mm == pytest.approx(27.0)
+        assert opted.fov_from_metadata is True
+        assert opted.hrir_interp == "barycentric"
+        assert opted.confidence_gate is True and opted.doppler is True
+
+    def test_from_args_carries_the_camera_flags(self):
+        import argparse
+        from vid2spatial_pkg.config import PipelineConfig, add_camera_cli_args
+        ap = argparse.ArgumentParser()
+        add_camera_cli_args(ap)
+        for name, default in [("video", "v.mp4"), ("audio", "a.wav"),
+                              ("traj_json", None), ("air_foa", None),
+                              ("brir_L", None), ("brir_R", None),
+                              ("room", "6,5,3"), ("mic", "3,2.5,1.5"),
+                              ("init_bbox", None), ("fov_deg", 60.0),
+                              ("stride", 1), ("method", "yolo"), ("cls", "person"),
+                              ("select_track_id", None),
+                              ("fallback_center_box", False), ("smooth_alpha", 0.2),
+                              ("depth_backend", "auto"), ("use_depth_adapter", False),
+                              ("refine_center", False),
+                              ("refine_center_method", "grabcut"),
+                              ("sam_ckpt", None), ("sam2_model_id", "x"),
+                              ("sam2_cfg", None), ("sam2_ckpt", None),
+                              ("rt60", 0.5), ("ir_backend", "auto"), ("no_ir", True),
+                              ("ang_smooth_ms", 50.0), ("max_deg_per_s", None),
+                              ("dist_gain_k", 1.0), ("dist_lpf_min_hz", 800.0),
+                              ("dist_lpf_max_hz", 8000.0), ("occ_json", None),
+                              ("estimate_occ", False), ("reverb_on", False),
+                              ("rev_rt60", 0.6), ("rev_wet_min", 0.05),
+                              ("rev_wet_max", 0.35), ("rev_wet_occ_boost", 0.1),
+                              ("out_foa", "o.wav"), ("out_st", None),
+                              ("out_bin", None), ("binaural_mode", "crossfeed"),
+                              ("sofa", None), ("save_traj", None)]:
+            ap.add_argument(f"--{name.replace('_', '-')}", dest=name, default=default)
+        args = ap.parse_args(["--motion-mode", "world_frame", "--focal-35mm", "27"])
+        cfg = PipelineConfig.from_args(args)
+        assert cfg.vision.camera.motion_mode == "world_frame"
+        assert cfg.vision.camera.focal_35mm == pytest.approx(27.0)
+        assert cfg.vision.camera.fov_explicit is False
+
+    def test_all_trajectory_paths_stamp_provenance(self):
+        """Legacy and precomputed paths must stamp like the V2 path."""
+        import inspect
+        from vid2spatial_pkg import pipeline as pl
+        src = inspect.getsource(pl.SpatialAudioPipeline._compute_trajectory)
+        assert src.count("_apply_camera_motion") == 3, \
+            "precomputed, V2 and legacy paths must all apply camera motion"
+        assert src.count("_stamp_intrinsics") == 2, \
+            "V2 and legacy paths must both stamp intrinsics"
+        assert 'intr.setdefault("fov_detail"' in src
+        assert 'intr["motion_mode"]' in src

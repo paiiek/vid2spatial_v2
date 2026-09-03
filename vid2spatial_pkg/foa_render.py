@@ -394,11 +394,15 @@ def apply_distance_gain_lpf(x: np.ndarray, sr: int, dist_s: np.ndarray,
     return y_lp.astype(np.float32)
 
 
-# ISO 9613-1 atmospheric absorption at 20 degC, 50 % RH, 101.325 kPa.
-# Octave-band attenuation in dB per kilometre; divided by 1000 for dB/m.
+# Atmospheric absorption, ISO 9613-1:1993 Table 1, at 20 degC / 50 % RH /
+# 101.325 kPa -- the standard's reference condition and the one the octave-band
+# figures below are tabulated for. Values are dB per kilometre; divided by 1000
+# for dB/m. The 16 kHz entry is extrapolated (the table stops at 8 kHz) and is
+# only ever reached by the clamp in air_absorption_cutoff_hz.
 ISO9613_FREQ_HZ = np.array([125.0, 250.0, 500.0, 1000.0, 2000.0,
                             4000.0, 8000.0, 16000.0])
-ISO9613_ALPHA_DB_PER_KM = np.array([0.4, 1.1, 2.7, 6.0, 15.3, 44.2, 140.0, 440.0])
+ISO9613_ALPHA_DB_PER_KM = np.array([0.38, 1.13, 2.36, 4.66, 9.89,
+                                    29.67, 105.29, 355.0])
 SPEED_OF_SOUND_M_S = 343.0
 
 
@@ -417,6 +421,44 @@ def air_absorption_cutoff_hz(dist_m: np.ndarray, *, drop_db: float = 3.0,
     log_a = np.log(ISO9613_ALPHA_DB_PER_KM / 1000.0)
     fc = np.exp(np.interp(np.log(alpha_target), log_a, log_f))
     return np.clip(fc, f_min, f_max).astype(np.float32)
+
+
+def _timevarying_onepole(x: np.ndarray, fc: np.ndarray, sr: int,
+                         block: Optional[int] = None) -> np.ndarray:
+    """One-pole low-pass with a time-varying cutoff, filtered block-wise.
+
+    The sample-by-sample Python loop this replaces is O(T) interpreted calls and
+    dominates the render cost. `fc` here is always box-smoothed over 0.5 s before
+    it arrives, so holding it constant across a block of 20 ms -- the default,
+    which scales with the sample rate rather than being a fixed sample count --
+    is well below the resolution of the control signal. scipy's lfilter carries
+    the filter state `zi` across blocks, so the result is continuous: there is no
+    per-block reset and no click at the boundaries.
+
+    Measured on 5 s of noise at 48 kHz over a 1 m -> 40 m air-absorption sweep:
+    about 46x faster than the loop for a peak deviation of 0.65 % of signal RMS.
+    Only apply_physical_distance uses this; apply_distance_gain_lpf keeps its
+    original loop so that the legacy render stays bit-exact.
+    """
+    from scipy.signal import lfilter
+
+    T = x.shape[0]
+    if T == 0:
+        return x.astype(np.float32)
+    if block is None:
+        block = max(128, int(sr * 0.020))   # 20 ms, sample-rate independent
+    two_pi = 2.0 * np.pi
+    out = np.empty(T, dtype=np.float32)
+    zi = np.zeros(1, dtype=np.float64)
+    for start in range(0, T, block):
+        end = min(start + block, T)
+        # the block's cutoff: the mean of an already heavily smoothed control
+        f = float(np.mean(fc[start:end]))
+        a = (two_pi * f) / (two_pi * f + sr)
+        seg, zi = lfilter([a], [1.0, -(1.0 - a)], x[start:end].astype(np.float64),
+                          zi=zi)
+        out[start:end] = seg.astype(np.float32)
+    return out
 
 
 def apply_physical_distance(x: np.ndarray, sr: int, dist_s: np.ndarray, *,
@@ -449,13 +491,7 @@ def apply_physical_distance(x: np.ndarray, sr: int, dist_s: np.ndarray, *,
     from scipy.ndimage import uniform_filter1d
     fc = uniform_filter1d(fc, size=max(1, int(sr * 0.5)), mode="nearest").astype(np.float32)
 
-    two_pi = 2.0 * np.pi
-    out = np.zeros_like(y)
-    prev = 0.0
-    for i in range(T):
-        a = (two_pi * fc[i]) / (two_pi * fc[i] + sr)
-        prev = prev + a * (y[i] - prev)
-        out[i] = prev
+    out = _timevarying_onepole(y, fc, sr)
     peak = float(np.max(np.abs(out)) + 1e-9)
     if peak > 1.0:
         out = out / (peak * 1.01)
@@ -488,6 +524,14 @@ def build_physical_wet_curve(dist_s: np.ndarray, *, d_ref_m: float = 1.0,
 
     i.e. the direct-to-reverberant ratio falls at the physical rate by
     construction rather than by a separately-tuned ramp.
+
+    LIMIT: wet is clamped at `wet_cap`, which with the defaults (K = 0.02,
+    d_ref = 1 m, cap 0.9) is reached at g = K / cap = 0.0222, i.e. about 45 m.
+    Beyond that the reverb can no longer be held at a constant absolute level
+    without the direct path going negative, so DRR flattens and the law stops
+    being physical. Measured DRR slope is -6.46 dB/doubling over 1-8 m and
+    steepens toward the cap; see reports/render_lane_2026-09-04.md. Raise
+    `wet_cap` or lower `reverb_send` to push the knee further out.
     """
     g = physical_direct_gain(dist_s, d_ref_m=d_ref_m, gain_floor=gain_floor)
     wet = np.clip(float(reverb_send) / np.maximum(g, 1e-6), 0.0, float(wet_cap))
@@ -518,9 +562,29 @@ def apply_doppler(x: np.ndarray, sr: int, dist_s: np.ndarray, *,
     rate = np.clip(1.0 - v / float(c_m_s),
                    1.0 - float(max_ratio), 1.0 + float(max_ratio))
     read_pos = np.cumsum(rate) - rate[0]
+
+    # TAIL. An APPROACHING source has rate > 1, so the read pointer advances
+    # faster than the output is written and runs off the end of the input before
+    # the output is full. Clamping it there would hold the final sample, which is
+    # a DC step and an audible thump. The run-off region is faded to silence
+    # instead, over `fade_n` samples ending at the moment the pointer leaves the
+    # input, and is silent thereafter. A RECEDING source has rate < 1 and simply
+    # does not consume the whole input, which needs no handling. At the +/-25 %
+    # clamp the run-off costs at most the last 20 % of a clip; a real trajectory
+    # rarely approaches at a constant fraction of the speed of sound for its
+    # whole duration.
+    over = np.nonzero(read_pos > (T - 1))[0]
+    n_valid = int(over[0]) if over.size else T
     read_pos = np.clip(read_pos, 0.0, T - 1)
     out = np.interp(read_pos, np.arange(T, dtype=np.float64),
                     x[:T].astype(np.float64))
+
+    if n_valid < T:
+        fade_n = min(int(0.020 * sr), n_valid)
+        if fade_n > 0:
+            ramp = 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, fade_n)))
+            out[n_valid - fade_n:n_valid] *= ramp
+        out[n_valid:] = 0.0
     return out.astype(np.float32)
 
 
@@ -722,7 +786,11 @@ def build_lost_curves(frames: List[Dict], T: int, sr: int, fps: float,
     if not lost.any() or T <= 0:
         return np.ones(max(T, 0), dtype=np.float32), np.zeros(max(T, 0), dtype=np.float32)
 
-    idx = np.array([f["frame"] for f in frames], dtype=np.float32)
+    # A frame dict without "frame" falls back to its position in the list, which
+    # is what an unsampled (stride 1) trajectory means anyway. Raising here would
+    # take down a render over a cosmetic key.
+    idx = np.array([float(f.get("frame", i)) for i, f in enumerate(frames)],
+                   dtype=np.float32)
     idx_samples = idx * (float(sr) / float(fps))
     s = np.arange(T, dtype=np.float32)
     lost_s = np.interp(s, idx_samples, lost).astype(np.float32)

@@ -26,7 +26,7 @@ cancel on both sides.  It is not a spatial-accuracy number.
 For a physically independent azimuth accuracy, use tools/eval_azimuth_kitti.py,
 which takes ground truth from KITTI 3D label centres (atan2(x_cam, z_cam)) and
 makes no projection assumption.  On 21819 KITTI detections that gives AzMAE
-3.807 deg for the deployed 60 deg assumption, versus 0.412 deg with the true
+3.785 deg for the deployed 60 deg assumption, versus 0.412 deg with the true
 intrinsics (reports/azimuth_kitti_2026-09-04.md).
 
 GT convention: LaSOT bbox [x, y, w, h] (LTWH, pixel), 1-indexed frames

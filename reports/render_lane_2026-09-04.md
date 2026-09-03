@@ -13,9 +13,9 @@ the rendered signal.
 | 1 | 18.33 | 26.88 | −22.07 | −17.05 |
 | 2 | 17.71 | 20.68 | −25.59 | −23.25 |
 | 4 | 16.58 | 14.29 | −29.53 | −29.64 |
-| 8 | 14.65 | 7.48 | −33.26 | −36.66 |
-| 16 | 11.62 | −0.38 | −36.94 | −45.54 |
-| 32 | 10.38 | −11.92 | −38.26 | −58.29 |
+| 8 | 14.65 | 7.48 | −33.26 | −36.45 |
+| 16 | 11.62 | −0.38 | −36.94 | −45.14 |
+| 32 | 10.38 | −11.92 | −38.26 | −57.75 |
 
 | mode | DRR span 1→32 m | DRR slope (all) | DRR slope 1–8 m | monotonic |
 |---|---|---|---|---|
@@ -27,9 +27,15 @@ The near-field slope is the number to read: −6.46 dB per doubling against the
 textbook −6.02. It steepens past 8 m only because the wet mix approaches its cap.
 The legacy path moves DRR by 1.2 dB per doubling, which is not a distance cue.
 
-Air absorption changes the direct level (−8.00 vs −7.54 dB/doubling broadband)
+Air absorption changes the direct level (−7.89 vs −7.54 dB/doubling broadband)
 without changing DRR, exactly as it should: it removes high frequencies from
-both paths.
+both paths. The coefficients are ISO 9613-1:1993 Table 1 at the standard's
+reference condition of 20 °C / 50 % RH / 101.325 kPa: 4.66, 9.89, 29.67 and
+105.29 dB/km at 1, 2, 4 and 8 kHz.
+
+Beyond about 45 m the wet mix hits its 0.9 cap, the reverb can no longer be held
+at a constant absolute level, and DRR flattens. That knee is documented on
+`build_physical_wet_curve` and moves out if `reverb_send` is lowered.
 
 `gain_mode="physical"` is opt-in. `depth_rel`, `bbox_area`, `bbox_area_log` and
 `hybrid` are untouched, so every existing stimulus still renders identically.

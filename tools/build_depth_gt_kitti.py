@@ -13,6 +13,9 @@ and because the labels are per-track over time it also exercises the
 Source (2.2 MB, public, no login):
   https://s3.eu-central-1.amazonaws.com/avg-kitti/data_tracking_label_2.zip
   → unzip → training/label_02/00XX.txt   (21 sequences)
+Second, non-tracking set (--format object, 5.6 MB):
+  https://s3.eu-central-1.amazonaws.com/avg-kitti/data_object_label_2.zip
+  → unzip → training/label_2/00XXXX.txt  (7481 images, same 15 trailing cols)
 
 Label columns:
   frame track_id type truncated occluded alpha l t r b h w l x y z rot_y
@@ -49,31 +52,41 @@ FRAME_AREA = FRAME_W * FRAME_H
 SKIP_TYPES = {"DontCare", "Misc"}
 
 
-def parse_seq(path: Path):
+def parse_seq(path: Path, fmt: str = "tracking"):
+    """Yield raw records from one label file.
+
+    fmt="tracking": KITTI Tracking label_02/<seq>.txt — 17 cols, leading
+        (frame, track_id); track = "<seq>_<id>".
+    fmt="object":   KITTI Object Detection label_2/<image>.txt — 15 cols, no
+        frame/id (one image per file). Each object becomes its own single-record
+        "track" "<image>_<row>" at frame 0, so the per-track proxy is trivially
+        exact and only the absolute area→d_rel mapping is meaningful on it.
+    """
     seq = path.stem
-    for line in path.read_text().splitlines():
+    off = 2 if fmt == "tracking" else 0
+    for i, line in enumerate(path.read_text().splitlines()):
         f = line.split()
-        if len(f) < 17:
+        if len(f) < 15 + off:
             continue
-        typ = f[2]
+        typ = f[off + 0]
         if typ in SKIP_TYPES:
             continue
         yield {
-            "track": f"{seq}_{int(f[1])}",
+            "track": f"{seq}_{int(f[1])}" if fmt == "tracking" else f"{seq}_{i}",
             "type": typ,
-            "frame": int(f[0]),
-            "truncated": float(f[3]),
-            "occluded": int(f[4]),
-            "bbox": tuple(float(v) for v in f[6:10]),
-            "z": float(f[15]),
+            "frame": int(f[0]) if fmt == "tracking" else 0,
+            "truncated": float(f[off + 1]),
+            "occluded": int(f[off + 2]),
+            "bbox": tuple(float(v) for v in f[off + 4:off + 8]),
+            "z": float(f[off + 13]),
         }
 
 
 def build(labels_dir: Path, min_len: int, max_occ: int, max_trunc: float,
-          z_min: float, z_max: float, types: set[str] | None):
+          z_min: float, z_max: float, types: set[str] | None, fmt: str = "tracking"):
     tracks: dict[str, list] = defaultdict(list)
     for p in sorted(labels_dir.glob("*.txt")):
-        for r in parse_seq(p):
+        for r in parse_seq(p, fmt):
             if r["occluded"] > max_occ or r["truncated"] > max_trunc:
                 continue
             if not (z_min <= r["z"] <= z_max):
@@ -108,14 +121,20 @@ def main(argv=None) -> int:
     ap.add_argument("--z-min", type=float, default=1.0)
     ap.add_argument("--z-max", type=float, default=80.0)
     ap.add_argument("--types", default="", help="comma list, e.g. Car,Pedestrian (default all)")
+    ap.add_argument("--format", choices=("tracking", "object"), default="tracking",
+                    help="'object' = KITTI Object Detection label_2 (per-image, no tracks; "
+                         "use --min-len 1, e.g. --labels data/kitti_object/training/label_2 "
+                         "--out test/full_eval/depth_gt_object.json)")
     a = ap.parse_args(argv)
+    if a.format == "object" and a.min_len > 1:
+        a.min_len = 1
 
     labels_dir = Path(a.labels)
     if not labels_dir.is_dir():
         print(f"labels dir not found: {labels_dir}\n" + __doc__.split("Source")[1].split("Label")[0])
         return 2
     types = {t for t in a.types.split(",") if t} or None
-    recs = build(labels_dir, a.min_len, a.max_occluded, a.max_truncated, a.z_min, a.z_max, types)
+    recs = build(labels_dir, a.min_len, a.max_occluded, a.max_truncated, a.z_min, a.z_max, types, a.format)
     Path(a.out).parent.mkdir(parents=True, exist_ok=True)
     Path(a.out).write_text(json.dumps(recs, separators=(",", ":")))
     n_tracks = len({r["track"] for r in recs})

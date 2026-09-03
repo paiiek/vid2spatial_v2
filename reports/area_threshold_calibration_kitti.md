@@ -49,6 +49,14 @@ curve of every clip (mid-range objects get louder/brighter), so it should go
 through an ear check before replacing `bbox_area` in
 `test/render_listening_test_v3.py`.
 
+**Replication on an independent set (KITTI Object Detection, 15 545
+objects / 7 481 images, per-image so no tracks; `--format object`,
+`test/full_eval/depth_gt_object.json`).** Target p5/p95 = 8.6 / 64.8 m.
+Current linear MAE 0.310, sat 9.2 %; log-area with the shipping thresholds
+(grid optimum 0.0751 / 0.00076) MAE 0.098, sat 6.9 %; grid-best linear
+0.141 at 25 % saturation. Same picture, different frames and class mix
+(71 % Car vs 53 %). JSON: `reports/area_threshold_calibration_kitti_object.json`.
+
 **Caveats.** KITTI is outdoor driving (6–60 m, cars/pedestrians); indoor or
 close-range footage (0.5–5 m) is outside the calibration range, though the
 log form is scale-free so only the thresholds would move. p5/p95 target

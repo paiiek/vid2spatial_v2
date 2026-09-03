@@ -888,6 +888,53 @@ class TestDepthHeuristicVerification(unittest.TestCase):
         self.assertLess(log["sat_frac"], 0.15)
         self.assertGreater(log["spearman"], 0.85)
 
+    def test_object_detection_gt_replicates_log_mapping_preference(self):
+        """Second, independent GT (KITTI Object Detection, per-image, no tracks,
+        test/full_eval/depth_gt_object.json, 2026-09-03). Different frames and class mix
+        (71 % Car) — the calibration conclusion must replicate: log-area mapping with the
+        shipping thresholds beats linear by >2x on the log-distance target
+        (measured 0.098 vs 0.310) at lower saturation (0.069 vs 0.092)."""
+        import importlib.util
+        import json
+        repo = Path(__file__).parent.parent
+        gt = repo / "test/full_eval/depth_gt_object.json"
+        self.assertTrue(gt.exists())
+        recs = json.loads(gt.read_text())
+        self.assertGreater(len(recs), 10000)
+        self.assertEqual(len({r["track"] for r in recs}), len(recs))   # one object per "track"
+        self.assertTrue(all(r["frame"] == 0 for r in recs))
+        spec = importlib.util.spec_from_file_location("calibrate_area_thresholds",
+                                                      repo / "tools" / "calibrate_area_thresholds.py")
+        cal = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cal)
+        a = np.array([r["area"] / r["frame_area"] for r in recs])
+        z = np.array([r["depth_m"] for r in recs])
+        z_near, z_far = np.percentile(z, 5), np.percentile(z, 95)
+        target = np.clip((np.log(z) - np.log(z_near)) / (np.log(z_far) - np.log(z_near)), 0, 1)
+        lin = cal.score(cal.d_rel_linear(a, cal.CUR_NEAR, cal.CUR_FAR), target, z)
+        log = cal.score(cal.d_rel_log(a, cal.CUR_NEAR, cal.CUR_FAR), target, z)
+        self.assertLess(log["mae"], lin["mae"] * 0.5)
+        self.assertLessEqual(log["sat_frac"], lin["sat_frac"] + 0.02)
+
+    def test_builder_object_format_parses_15_column_rows(self):
+        """--format object: KITTI Object Detection rows (no frame/id) → one record each."""
+        import importlib.util
+        import tempfile
+        repo = Path(__file__).parent.parent
+        spec = importlib.util.spec_from_file_location("build_depth_gt_kitti",
+                                                      repo / "tools" / "build_depth_gt_kitti.py")
+        b = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(b)
+        row = "Pedestrian 0.00 0 -0.20 712.40 143.00 810.73 307.92 1.89 0.48 1.20 1.84 1.47 8.41 0.01\n"
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "000000.txt").write_text(row + "DontCare -1 -1 -10 1 2 3 4 -1 -1 -1 -1000 -1000 -1000 -10\n")
+            recs = b.build(Path(d), 1, 0, 0.0, 1.0, 80.0, None, fmt="object")
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["type"], "Pedestrian")
+        self.assertAlmostEqual(recs[0]["depth_m"], 8.41)
+        self.assertAlmostEqual(recs[0]["area"], (810.73 - 712.40) * (307.92 - 143.00), places=0)
+        self.assertEqual(recs[0]["track"], "000000_0")
+
     def test_missing_ground_truth_is_reported_not_fabricated(self):
         """With no GT file anywhere, find_gt must return None (script then reports it)."""
         import tempfile

@@ -1,3 +1,5 @@
+> **STALE (2026-09-04).** 이 문서는 아카이브이며 일부 수치는 이후 측정으로 대체되었습니다. 현재 값은 `test/full_eval/` 과 `reports/`, 알려진 결함은 `docs/ISSUES.md` 를 보십시오.
+
 # vid2spatial v2 — System Overview
 
 **처음 보는 사람을 위한 전체 시스템 설명**
@@ -85,8 +87,8 @@
 
 | 모델 | 파일 | 특징 |
 |------|------|------|
-| **Metric3D v2** (기본) | `depth_metric3d.py` | Universal metric depth, indoor/outdoor 구분 불필요, MAE 1.2m |
-| Depth Anything V2 | `depth_anything_adapter.py` | Indoor/Outdoor 자동 분류, MAE 2.1m |
+| **Metric3D v2** (기본) | `depth_metric3d.py` | Universal metric depth, indoor/outdoor 구분 불필요. ~~MAE 1.2m~~ 이 수치는 이 저장소의 어떤 산출물로도 재현되지 않음 — KITTI 결과 (`test/full_eval/DEPTH_GT_KITTI_RESULTS.md`)와 `reports/depth_composed_kitti_2026-09-04.md` 참조 |
+| Depth Anything V2 | `depth_anything_adapter.py` | Indoor/Outdoor 자동 분류. ~~MAE 2.1m~~ 동일하게 출처 없음 (위 문서로 대체됨) |
 
 **핵심**: Monocular depth는 절대 거리를 직접 측정할 수 없어 오차가 큼 (1~2m MAE). 그러나 temporal 변화 (가까워지고 멀어지는 방향)는 신뢰할 수 있음.
 

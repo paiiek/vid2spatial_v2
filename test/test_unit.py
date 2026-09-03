@@ -1439,3 +1439,70 @@ class TestAvCorrelation(unittest.TestCase):
         from vid2spatial_pkg.pipeline import SpatialAudioPipeline
         self.assertTrue(hasattr(SpatialAudioPipeline, "_score_av_confidence"))
         self.assertIn("_score_av_confidence", inspect.getsource(SpatialAudioPipeline.run))
+
+
+# ── A17/A18/A19: published results and doc hygiene ───────────────────────────
+
+import pathlib  # noqa: E402
+
+
+class TestDocumentedResults(unittest.TestCase):
+    """The two strongest results were buried in JSON, and several docs carried
+    numbers no artefact in the repo produces."""
+
+    ROOT = str(pathlib.Path(__file__).resolve().parent.parent)
+
+    def _read(self, rel):
+        return (pathlib.Path(self.ROOT) / rel).read_text(encoding="utf-8")
+
+    def test_readme_publishes_the_e2e_negative_result_with_its_caveat(self):
+        r = self._read("README.md")
+        self.assertIn("2.5D Visual Sound", r)
+        self.assertIn("19.60", r)
+        self.assertIn("18.82", r)  # the mono floor it fails to beat
+        self.assertIn("25%", r)
+        # the protocol caveat must travel with the number
+        self.assertIn("different dataset and protocol", r)
+
+    def test_readme_publishes_the_stabilisation_ablation(self):
+        r = self._read("README.md")
+        self.assertIn("1.3641", r)
+        self.assertIn("1.3669", r)
+        for token in ("691", "40×", "7000×"):
+            self.assertIn(token, r)
+
+    def test_contribution_doc_carries_both_results(self):
+        c = self._read("docs/ismar_final/ISMAR_CONTRIBUTION.md")
+        self.assertIn("2.5D Visual Sound", c)
+        self.assertIn("STABILIZATION_PROXY_ABLATION.json", c)
+
+    def test_the_unsourced_azimuth_claim_is_gone(self):
+        """0.37 deg over '15 synthetic sequences' is produced by no file here."""
+        c = self._read("docs/ismar_final/ISMAR_CONTRIBUTION.md")
+        self.assertNotIn("demonstrate 0.37", c)
+        self.assertIn("REMOVED 2026-09-04", c)
+
+    def test_issues_file_exists_and_tracks_the_bridge_caveat(self):
+        i = self._read("docs/ISSUES.md")
+        for anchor in ("I1", "I2", "I3", "legacy-spatial"):
+            self.assertIn(anchor, i)
+        # and the README points at it instead of carrying prose caveats
+        r = self._read("README.md")
+        self.assertIn("docs/ISSUES.md", r)
+        self.assertNotIn("still normalises with 20 m", r)
+
+    def test_handoff_is_marked_historical(self):
+        h = self._read("docs/HANDOFF_2026-09-02_engine_boundary.md")
+        self.assertIn("HISTORICAL", h)
+        self.assertIn("Do not follow the merge instructions", h)
+
+    def test_system_overview_depth_numbers_are_retracted(self):
+        s = self._read("docs/archive/SYSTEM_OVERVIEW.md")
+        self.assertIn("STALE", s)
+        self.assertIn("~~MAE 1.2m~~", s)
+        self.assertIn("~~MAE 2.1m~~", s)
+
+    def test_loudness_regression_report_exists_and_flags_the_ear_check(self):
+        m = self._read("reports/gain_mode_loudness_2026-09-04.md")
+        self.assertIn("bbox_area_log", m)
+        self.assertIn("ear check is still open", m)

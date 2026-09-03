@@ -69,9 +69,46 @@ Forward pass (Kalman) + Backward pass (RTS) → 인과 lag 없음
 - cx/cy back-projection: pinhole 역변환으로 smoother bbox 위치 계산
 
 **결과:**
-- Az MAE 기준: 0.37° (합성 GT 15 시퀀스)
+- ~~Az MAE 기준: 0.37° (합성 GT 15 시퀀스)~~ **REMOVED 2026-09-04**: 이 저장소의 어떤 파일도 이 수치를 생성하지 않으며 합성 GT 15 시퀀스도 존재하지 않음. 측정된 값은 22개 LaSOT 클립 AzMAE 1.36° (`docs/ismar_final/QUANT_EVAL_20260304.md`) 이며, 그 지표 자체의 순환성은 `docs/ISSUES.md` I4 참조
 - Px Error: 4.7px
 - d_rel jitter: dist_m 기반 0.008~0.013 (V1 대비 개선)
+
+### C3b. 학습 기반 end-to-end mono→binaural 은 mono 하한을 넘지 못한다 (음성 결과)
+
+가장 가까운 공개 계열인 2.5D Visual Sound 를 사전학습 가중치로 FAIR-Play test
+클립에 돌리고, 우리 출력에 쓰는 것과 동일한 ITD-inversion harness 로 녹음된
+GT binaural 대비 azimuth 를 측정했다 (inversion floor 는 공통).
+
+| 조건 (FAIR-Play 80 클립) | AzMAE vs 녹음 GT |
+|---|---|
+| 2.5D Visual Sound (ILD) | 19.60° |
+| 2.5D Visual Sound (ITD) | 18.81° |
+| Mono (공간화 없음) | 18.82° |
+
+mono 하한을 넘는 클립은 **25%** 뿐이고, ILD 상관은 **0.023** 이다. 즉 이
+설정에서 학습 기반 mono→binaural 은 사용 가능한 azimuth 를 더하지 못한다.
+
+**주의**: FAIR-Play(녹음 binaural) 와 LaSOT(시각 추적) 은 데이터셋도 프로토콜도
+다르므로 위 19.60° 를 우리의 1.36° 와 직접 비교해서는 안 된다. 이 결과가
+뒷받침하는 것은 "학습 end-to-end 대신 결정론적 기하 파이프라인" 이라는 설계
+선택이지, 성능 배수가 아니다.
+출처: `test/full_eval/E2E_COMPARISON.json` (`test/run_e2e_comparison.py`).
+동일 harness 상 우리 binaural 의 ITD-inversion floor 는 7.27°.
+
+### C3c. 안정화 ablation — 정확도 손실 없이 jitter 40배 감소
+
+동일 22 클립, angle_smooth 80 ms / d_rel attack 0.7 s / release 0.2 s:
+
+| 지표 | Off | On | 변화 |
+|---|---|---|---|
+| Azimuth jitter | 691 | 17 | **40× 감소** |
+| Azimuth jerk | 4.69e7 | 6.60e3 | **7000× 감소** |
+| Elevation jitter | 342 | 8.1 | 42× 감소 |
+| AzMAE | 1.3641° | 1.3669° | +0.0028° |
+
+출처: `test/full_eval/STABILIZATION_PROXY_ABLATION.json`. AzMAE 열은
+`docs/ISSUES.md` I4 의 순환성 주의가 그대로 적용되지만, jitter/jerk 는 출력
+궤적 자체의 성질이므로 해당되지 않는다.
 
 ### C4. Physics-Motivated Distance Rendering
 
@@ -258,8 +295,8 @@ Our key insight is that per-clip relative distance normalization, combined with 
 temporal smoothing of 3D trajectories, produces perceptually consistent spatial audio
 despite the inherent noise of monocular depth estimation.
 
-Experiments on LaSOT sequences demonstrate 0.37° azimuth MAE and 4.7px localization error,
-with a 43-test unit suite and 38-test integration suite confirming system robustness.
+Experiments on 22 LaSOT sequences demonstrate 1.36 deg azimuth MAE (QUANT_EVAL_20260304.md),
+with the caveat that this metric shares its projection model with the prediction (docs/ISSUES.md I4).
 ```
 
 ---

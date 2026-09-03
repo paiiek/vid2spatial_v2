@@ -1,4 +1,21 @@
-# HANDOFF 2026-09-02 — engine plugin boundary (branches to merge)
+# HANDOFF 2026-09-02 — engine plugin boundary (HISTORICAL)
+
+> **CLOSED 2026-09-04. Do not follow the merge instructions below.** Both
+> branches are already merged into `origin/main` (`09289ea`); running the
+> `git merge --ff-only` / `git worktree remove` commands will fail or remove
+> the wrong tree. This file is kept as the record of how the boundary was
+> established. Live defects and limitations are tracked in `docs/ISSUES.md`.
+>
+> Status of the items this document lists as open:
+> - depth GT file — DONE 2026-09-03 (`test/full_eval/depth_gt.json`).
+> - bridge `/vid2spatial/spatial` 20 m vs sender 10 m — the vid2spatial half is
+>   FIXED (the bundle is no longer emitted; `docs/ISSUES.md` I1). The engine
+>   half is still open in the engine repo.
+> - ADR `/vid2spatial/obj/{N}/azim` unimplemented — still open, engine repo
+>   (`docs/ISSUES.md` I3).
+> - ruff baseline — still open.
+
+## Original handover (2026-09-02)
 
 Written by the lang_control session. The `main` checkout at /home/seung/mmhoa/vid2spatial_v2
 had ~40 uncommitted files from another session (incl. test/test_unit.py, test/demo/server.py,

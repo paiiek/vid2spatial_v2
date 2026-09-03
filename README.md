@@ -47,6 +47,54 @@ Video / Sketch
 | Efficiency study N=12, time reduction | 41–49% |
 | Edit operations reduction | 87–90% |
 
+Caveat on the headline AzMAE: ground truth and prediction share the same
+pinhole projection and the same assumed 60° FOV, so this number measures
+tracking, not camera geometry. See `docs/ISSUES.md` I4.
+
+### Learned end-to-end mono→binaural does not beat a mono floor
+
+The closest published family to an end-to-end alternative, 2.5D Visual Sound,
+was run pretrained on FAIR-Play test clips and its output binaural scored
+against the recorded ground-truth binaural with the same ITD-inversion harness
+used on our own output, so the inversion floor is common-mode.
+
+| Condition (80 FAIR-Play clips) | AzMAE vs recorded GT |
+|---|---|
+| 2.5D Visual Sound (ILD read-out) | 19.60° |
+| 2.5D Visual Sound (ITD read-out) | 18.81° |
+| Mono, i.e. no spatialisation at all | 18.82° |
+
+It beats the mono floor on only **25%** of clips, and the correlation between
+its ILD and the true ILD is **0.023**. Learned mono→binaural spatialisation, in
+this configuration, adds no usable azimuth.
+
+This is a *different dataset and protocol* from the 1.36° tracking number above
+and the two must not be compared directly: FAIR-Play is recorded binaural music
+in a room, LaSOT is visual tracking. What the result supports is the choice of a
+deterministic geometric pipeline over a learned end-to-end one, not a claim that
+this system is 14x better. Source: `test/full_eval/E2E_COMPARISON.json`,
+produced by `test/run_e2e_comparison.py`; our own binaural ITD-inversion floor
+on the same harness is 7.27° (`BINAURAL_AZ_INVERSION.json`).
+
+### Trajectory stabilisation is nearly free
+
+Turning the stabiliser on (80 ms angle smoothing, d_rel attack 0.7 s / release
+0.2 s) over the same 22 clips:
+
+| Metric | Off | On | Change |
+|---|---|---|---|
+| Azimuth jitter | 691 | 17 | **40× lower** |
+| Azimuth jerk | 4.69e7 | 6.60e3 | **7000× lower** |
+| Elevation jitter | 342 | 8.1 | 42× lower |
+| AzMAE | 1.3641° | 1.3669° | +0.0028° |
+
+Four decimal places of accuracy buy two orders of magnitude of smoothness.
+Source: `test/full_eval/STABILIZATION_PROXY_ABLATION.json`. The AzMAE column
+inherits the circularity caveat above; the jitter and jerk columns do not,
+since they are properties of the output trajectory alone.
+
+Known defects and limitations: `docs/ISSUES.md`.
+
 ---
 
 ## Installation
@@ -135,9 +183,9 @@ Writes one row per tracked frame: `frame, t_s, object_id, az_deg, el_deg, dist_m
 dist_norm, gain_lin, az_adm_deg, el_adm_deg, dist_adm, confidence`. The `*_adm`
 columns already apply the bridge contract (`az_adm = -az`, `dist_adm = 1 - dist_norm`),
 so they map 1:1 onto `/adm/obj/N/aed` via the bridge's `/vid2spatial/distance`
-path (10 m). Caveat: the bridge's `/vid2spatial/spatial` handler (emitted last by
-`send_frame`) still normalises with 20 m, so a live bridge currently forwards
-`dist_m/20` until it is unified on 10 m (engine-repo item). `automation_path` is
+path (10 m), which is now the only distance the sender emits (see `docs/ISSUES.md`
+I1 for the legacy `/vid2spatial/spatial` bundle and the `--legacy-spatial` flag).
+`automation_path` is
 read from an argparse namespace as `--automation-path` if your parser defines it. Note: spatial_engine has no per-object
 trajectory loader (its `TimelineJson` only carries scene-snapshot keyframes), so this
 is a documented interchange format, not a native engine file.

@@ -162,3 +162,32 @@ python3 run_e2e.py DIR   # PipelineConfig(video=clip.mp4, audio=tone.wav,
 Outputs: `out.traj.json` 60 frames (38971 B), `out.foa.wav` (96000, 4) @ 48 kHz
 (1536104 B), `out.stereo.wav` (384044 B). The fallback warning fires at
 `pipeline.py:859`, so the fallback is what carried the run.
+
+## I11 — What `av_confidence` cannot tell you
+
+The A4 gate correlates the audio envelope against the tracked object's motion
+energy. Three limits are worth stating, because a 0.0 score is common and
+almost never means "wrong pairing":
+
+1. **Any constant series makes the score undefined**, and it is then reported
+   as 0.0 with a warning. That covers a steady sound (a running engine), a
+   static object, and — most commonly — an object at **constant velocity**,
+   whose motion energy is flat. A car crossing the frame at a steady speed is
+   the ordinary case. Low confidence means "unverified", never "wrong".
+
+2. **The score is not a p-value.** The chance level subtracted is the 95th
+   percentile of the lag-scan maximum over 200 phase-randomised surrogates,
+   which is a calibration, not a guarantee about a single clip. Measured
+   false-alarm rate against the WARN gate on unrelated pairs: 2.5 percent at
+   30 frames, 1.0 percent at 60. Until 2026-09-04 the null was the single-`r`
+   form `2/sqrt(n)`, which ignored the maximisation over roughly 31 lags and
+   let about 18 percent of unrelated pairings through as verified.
+
+3. **The envelope assumes the audio and the video share a start time.** Windows
+   are `sr/fps` samples, so window *i* is frame *i*; audio of a different
+   duration is padded or truncated and warns. Offset audio is not detected
+   beyond the +/-0.5 s lag scan.
+
+The gate reaches JSON exports in full. The CSV export carries only the scalar
+`av_confidence` column, not the warning text; see the schema note in
+`vid2spatial_pkg/trajectory_export.py`.

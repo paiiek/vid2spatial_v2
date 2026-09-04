@@ -1356,6 +1356,58 @@ class TestAvCorrelation(unittest.TestCase):
         e = np.interp(np.arange(n) / self.SR * self.FPS, np.arange(len(env)), env)
         return (e * rng.normal(0, 1, n)).astype(np.float32)
 
+    def test_unrelated_pairs_clear_the_warn_gate_under_5pct(self):
+        """The null must cover the MAXIMUM over the lag scan, not a single r.
+
+        With the old 2/sqrt(n) null, roughly one unrelated pairing in six was
+        written out as verified at 30 and 60 frames. Seeded Monte Carlo, 200
+        independent unrelated pairs per length.
+        """
+        from vid2spatial_pkg.av_correlation import AV_CONFIDENCE_WARN, av_confidence
+        rng = np.random.default_rng(1)
+        hop = int(self.SR / self.FPS)
+        for n in (30, 60):
+            confs = []
+            for _ in range(200):
+                xs = np.cumsum(rng.standard_normal(n))
+                frames = [{"frame": i, "bbox": [float(x), 0.0, 1.0, 1.0]}
+                          for i, x in enumerate(xs)]
+                env = np.abs(rng.standard_normal(n))
+                audio = (rng.standard_normal(n * hop)
+                         * np.repeat(env, hop)).astype(np.float32)
+                confs.append(av_confidence(audio, self.SR, frames,
+                                           self.FPS)["av_confidence"])
+            frac = float(np.mean(np.array(confs) > AV_CONFIDENCE_WARN))
+            self.assertLessEqual(
+                frac, 0.05,
+                f"n={n}: {frac:.1%} of unrelated pairs cleared the WARN gate")
+
+    def test_null_grows_with_the_number_of_lags(self):
+        """Scanning more lags must raise the chance level, or the scan is free."""
+        from vid2spatial_pkg.av_correlation import lag_max_null
+        rng = np.random.default_rng(4)
+        a = np.abs(rng.standard_normal(120))
+        b = np.abs(rng.standard_normal(120))
+        narrow = lag_max_null(a, b, max_lag=1)
+        wide = lag_max_null(a, b, max_lag=25)
+        self.assertGreater(wide, narrow)
+        self.assertGreater(narrow, 0.0)
+
+    def test_envelope_windows_are_on_the_video_clock(self):
+        """Window i must cover frame i, whatever the audio duration."""
+        from vid2spatial_pkg.av_correlation import audio_envelope
+        n_frames, fps = 20, 30.0
+        hop = int(self.SR / fps)
+        # a click in frame 5 only; audio runs 4x longer than the trajectory
+        audio = np.zeros(n_frames * hop * 4, dtype=np.float32)
+        audio[5 * hop:6 * hop] = 1.0
+        with pytest.warns(RuntimeWarning, match="video clock"):
+            env = audio_envelope(audio, self.SR, fps, n_frames)
+        self.assertEqual(len(env), n_frames)
+        self.assertEqual(int(np.argmax(env)), 5)
+        # equal-split would have put the click at frame 1 of 20
+        self.assertLess(env[1], env[5])
+
     def test_matched_audio_scores_high_mismatched_scores_low(self):
         from vid2spatial_pkg.av_correlation import av_confidence
         rng = np.random.default_rng(1)

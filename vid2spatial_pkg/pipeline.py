@@ -755,6 +755,17 @@ class SpatialAudioPipeline:
             import soundfile as sf
             sf.write(self.config.output.binaural_path, binaural.T, sr)
 
+    def _persist_trajectory(self, traj: Dict[str, Any]) -> None:
+        """Re-write the trajectory JSON after late-stage annotation."""
+        path = self.config.output.trajectory_path
+        if not path or traj is None:
+            return
+        try:
+            with open(path, "w") as fh:
+                json.dump(traj, fh, indent=2)
+        except Exception as e:  # a diagnostic must never break a render
+            print(f"[warn] could not re-write trajectory JSON: {e}")
+
     def _score_av_confidence(self, audio, sr, trajectory) -> Optional[Dict]:
         """Attach an audio-visual correlation report to the trajectory.
 
@@ -936,6 +947,10 @@ class SpatialAudioPipeline:
         print(f'      → Loaded {len(audio)} samples at {sr} Hz ({len(audio)/sr:.2f}s)')
 
         self._score_av_confidence(audio, sr, self._trajectory)
+        # av_confidence is attached AFTER the trajectory JSON was written in
+        # step 1, so re-persist it; otherwise the on-disk trajectory carries
+        # the geometry lane's provenance but not the plumbing lane's score.
+        self._persist_trajectory(self._trajectory)
 
         if self.config.output.automation_path:
             from .trajectory_export import export_trajectory

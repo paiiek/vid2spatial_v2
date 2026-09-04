@@ -250,6 +250,27 @@ def to_markdown(rep: dict) -> str:
                        "0.5-3x band. The mapping is suspect regardless of its "
                        "distance MAE.")
             L += [verdict, ""]
+    # Clips whose two conditions are identical contribute nothing to the
+    # contrast, and saying so is the difference between "22 clips agree" and
+    # "20 clips agree and 2 could not disagree".
+    tied, n_clips = [], len(rep["per_clip"])
+    if len(modes) == 2:
+        ma, mb = modes
+        for clip, c in rep["per_clip"].items():
+            x, y = c.get(ma, {}), c.get(mb, {})
+            if (x.get("lufs_integrated") == y.get("lufs_integrated")
+                    and x.get("lufs_range_db") == y.get("lufs_range_db")
+                    and x.get("lufs_integrated") is not None):
+                tied.append(clip)
+    if tied:
+        L += [f"**{len(tied)} of {n_clips} clips are identical under both "
+              f"conditions** ({', '.join(sorted(tied))}) and therefore carry no "
+              "information about the change. Their bounding box never drops "
+              "below the AREA_NEAR threshold (8 percent of the frame) in any "
+              "frame, so area_norm saturates at 1 and d_rel is pinned at 0 "
+              "under BOTH curves: linear and log agree exactly wherever the "
+              "input is clipped. Read the means as a contrast over "
+              f"the remaining {n_clips - len(tied)} clips.", ""]
     L += ["", "## Open", "",
           "- **B1, human**: a 2-condition A/B on ~5 clips with 3 listeners. "
           "No objective metric here settles whether the new mapping sounds right."]

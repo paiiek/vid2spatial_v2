@@ -53,6 +53,8 @@ Moving from `bbox_area` to `bbox_area_log`:
 
 Loudness range does NOT collapse and does not explode (1.37x). The change is in the direction the calibration predicted -- mid-field material is somewhat louder and brighter -- and its size is modest, so the objective check gives no reason to revert the default.
 
+**3 of 22 clips are identical under both conditions** (guitar-9, motorcycle-3, train-17) and therefore carry no information about the change. Their bounding box never drops below the AREA_NEAR threshold (8 percent of the frame) in any frame, so area_norm saturates at 1 and d_rel is pinned at 0 under BOTH curves: linear and log agree exactly wherever the input is clipped. Read the means as a contrast over the remaining 19 clips.
+
 
 ## Open
 

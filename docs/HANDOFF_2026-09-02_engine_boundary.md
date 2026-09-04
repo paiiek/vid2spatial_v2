@@ -47,7 +47,7 @@ git worktree remove /home/seung/mmhoa/vid2spatial_v2-wt-contract
 ```
 
 ## Open items NOT in this repo (handed to the spatial_engine session)
-- bridge normalises `/vid2spatial/spatial` dist with 20 m, sender `/distance` uses 10 m → live distance ~2x too far.
+- bridge normalises `/vid2spatial/spatial` dist with 20 m, sender `/distance` uses 10 m → live distance ~2x too NEAR (10 m arrived as ADM 0.5, and ADM 1 is far). Corrected 2026-09-04; the direction is tabulated in I1.
 - ADR `/vid2spatial/obj/{N}/azim` family unimplemented in the bridge.
 
 ## Open items in THIS repo (future)

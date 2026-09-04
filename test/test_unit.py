@@ -1834,3 +1834,53 @@ class TestKittiFrameFetch(unittest.TestCase):
         m._ranged_read = lambda url, a, b: bytes(blob)[a:b + 1]
         self.assertFalse(m.fetch("http://x", zi, dst))
         self.assertFalse(dst.exists())
+
+
+class TestAudioIOCallTimeFallback(unittest.TestCase):
+    """A call-time failure inside librosa must fall back, not propagate (L9)."""
+
+    def _wav(self):
+        import tempfile
+        import soundfile as sf
+        d = pathlib.Path(tempfile.mkdtemp())
+        p = d / "t.wav"
+        sr = 48000
+        t = np.arange(sr // 4) / sr
+        sf.write(str(p), (0.3 * np.sin(2 * np.pi * 440 * t)).astype("float32"), sr)
+        return p
+
+    def test_any_call_time_error_falls_back(self):
+        from vid2spatial_pkg import audio_io
+        wav = self._wav()
+
+        class Boom:                      # e.g. a missing resampler backend
+            @staticmethod
+            def load(*a, **kw):
+                raise RuntimeError("soxr not available")
+
+        orig = audio_io._librosa
+        audio_io._librosa = lambda: Boom
+        audio_io._WARNED = False
+        try:
+            y, sr = audio_io.load_audio(wav, sr=None, mono=True)
+        finally:
+            audio_io._librosa = orig
+        self.assertEqual(sr, 48000)
+        self.assertEqual(y.dtype, np.float32)
+
+    def test_missing_file_still_raises(self):
+        """The fallback must not turn a caller's bug into a silent detour."""
+        from vid2spatial_pkg import audio_io
+
+        class Missing:
+            @staticmethod
+            def load(*a, **kw):
+                raise FileNotFoundError("nope.wav")
+
+        orig = audio_io._librosa
+        audio_io._librosa = lambda: Missing
+        try:
+            with self.assertRaises(FileNotFoundError):
+                audio_io.load_audio("nope.wav", sr=None)
+        finally:
+            audio_io._librosa = orig

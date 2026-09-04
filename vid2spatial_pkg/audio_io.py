@@ -9,7 +9,9 @@ before doing any work -- see ``docs/ISSUES.md`` I10.
 
 ``load_audio`` keeps librosa as the primary path, unchanged, and falls back to
 ``soundfile.read`` plus ``scipy.signal.resample_poly`` when librosa cannot be
-imported. The fallback matches librosa's defaults used here: mono mixdown by
+imported, or when the call itself fails for any reason other than the file
+being missing (numba's NumPy check is deferred to first use, and a missing
+resampler backend fails the same way). The fallback matches librosa's defaults used here: mono mixdown by
 channel mean, float32, shape ``(n,)``, native sample rate when ``sr is None``.
 
 It is NOT bit-identical: librosa resamples with soxr by default, the fallback
@@ -52,9 +54,14 @@ def load_audio(path, sr: Optional[int] = None,
     if lib is not None:
         try:
             return lib.load(str(path), sr=sr, mono=mono)
-        except ImportError:
-            # librosa imports fine but defers numba to first use, so the NumPy
-            # incompatibility can surface here rather than at import.
+        except FileNotFoundError:
+            raise                       # a missing file is the caller's bug
+        except Exception:
+            # Broad on purpose, and matching the breadth of the import guard.
+            # librosa defers numba to first use, so the NumPy incompatibility
+            # surfaces here rather than at import; a missing soxr or a lazy
+            # backend import fails the same way. Anything the fallback can read
+            # itself should be read, not raised.
             pass
 
     import soundfile as sf  # noqa: PLC0415

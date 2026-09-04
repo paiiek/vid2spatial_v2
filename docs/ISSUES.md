@@ -154,10 +154,13 @@ a 60-frame LaSOT clip (`airplane-1`, KCF from the GT first box, `depth=none`)
 with a 2 s 220 Hz tone:
 
 ```bash
-python3 run_e2e.py DIR   # PipelineConfig(video=clip.mp4, audio=tone.wav,
-                         #   tracking=kcf init_bbox=(367,101,41,16), depth=none,
-                         #   out foa/stereo/trajectory) -> SpatialAudioPipeline.run()
+python3 tools/run_e2e_smoke.py --out DIR \
+    --lasot /home/seung/mmhoa/vid2spatial_v2/data/lasot/airplane-1 --frames 60
 ```
+
+That script builds the mp4 and the tone from the clip, tracks with KCF from the
+clip's own first ground-truth box, runs with no depth backend, and calls
+``SpatialAudioPipeline.run()``.
 
 Outputs: `out.traj.json` 60 frames (38971 B), `out.foa.wav` (96000, 4) @ 48 kHz
 (1536104 B), `out.stereo.wav` (384044 B). The fallback warning fires at

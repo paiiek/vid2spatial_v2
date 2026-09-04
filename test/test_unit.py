@@ -1211,44 +1211,57 @@ class TestReadmeQuickStartMatchesCode:
 
 
 class TestMultiSourceFoa:
-    """multi_source.py is listed in the README as a shipped feature but had no
-    caller and no test.  Two defects were hiding there: fps was hardcoded to 30
-    (the trajectory_export defect again) and the AmbiX azimuth negation that
-    render_foa_from_trajectory applies was missing, mirroring the mix L/R."""
+    """Multi-object rendering used to live in a second, unreachable module.
+
+    vid2spatial_pkg/multi_source.py had no caller and no test, and two defects
+    were hiding in it: fps hardcoded to 30, and a missing AmbiX azimuth
+    negation that mirrored the mix L/R. A5 built the shipped implementation on
+    pipeline._render_multi_source instead, so that module was deleted and these
+    checks now run against the shipped path, at the level below the pipeline:
+    foa_render.encode_many_to_foa, which is what it calls.
+    """
 
     @staticmethod
-    def _traj(fps, az):
-        return {"fps": fps, "frames": [{"frame": i, "az": az, "el": 0.0, "dist_m": 1.0}
-                                       for i in range(50)]}
+    def _angles(n, az):
+        return np.full(n, az, dtype=np.float32), np.zeros(n, dtype=np.float32)
 
     def test_matches_single_source_channel_signs(self):
-        from vid2spatial_pkg.multi_source import encode_multi_source_foa
-        from vid2spatial_pkg.foa_render import encode_mono_to_foa
-        sr, T = 48000, 24000
+        """One source through the mixer must equal the single-source encoder."""
+        from vid2spatial_pkg.foa_render import encode_many_to_foa, encode_mono_to_foa
+        T = 24000
         audio = np.ones(T, dtype=np.float32)
         az = 1.2  # right of image
-        mine = encode_multi_source_foa([audio], [self._traj(30.0, az)], sr=sr)
-        ref = encode_mono_to_foa(audio, np.full(T, -az, np.float32),
-                                 np.zeros(T, np.float32))
-        # W and Y (index 0 and 1 in ACN) must agree in sign with the reference.
+        az_s, el_s = self._angles(T, -az)   # pipeline negates for AmbiX
+        mine = encode_many_to_foa([audio], [az_s], [el_s])
+        ref = encode_mono_to_foa(audio, az_s, el_s)
+        np.testing.assert_allclose(mine, ref, atol=1e-6)
         for ch in (0, 1):
-            assert np.sign(np.mean(mine[ch])) == np.sign(np.mean(ref[ch])), \
-                f"channel {ch} sign differs from the single-source renderer"
+            assert np.sign(np.mean(mine[ch])) == np.sign(np.mean(ref[ch]))
 
-    def test_honours_trajectory_fps(self):
-        from vid2spatial_pkg.multi_source import encode_multi_source_foa
-        sr, T = 48000, 48000
-        audio = np.ones(T, dtype=np.float32)
-        moving = {"fps": 25.0, "frames": [{"frame": i, "az": -1.0 + 2.0 * i / 49,
-                                           "el": 0.0, "dist_m": 1.0} for i in range(50)]}
-        at25 = encode_multi_source_foa([audio], [moving], sr=sr)
-        at30 = encode_multi_source_foa([audio], [dict(moving, fps=30.0)], sr=sr)
-        assert not np.allclose(at25, at30), "trajectory fps is being ignored"
+    def test_mix_is_the_sum_of_its_sources(self):
+        from vid2spatial_pkg.foa_render import encode_many_to_foa
+        T = 12000
+        # kept quiet: the mixer peak-normalises above 1.0, which is not
+        # linearity's fault and would mask it
+        a, b = np.full(T, 0.2, np.float32), np.full(T, 0.1, np.float32)
+        az_a, el = self._angles(T, -1.0)
+        az_b, _ = self._angles(T, +1.0)
+        mix = encode_many_to_foa([a, b], [az_a, az_b], [el, el])
+        solo_a = encode_many_to_foa([a], [az_a], [el])
+        solo_b = encode_many_to_foa([b], [az_b], [el])
+        np.testing.assert_allclose(mix, solo_a + solo_b, atol=1e-6)
 
     def test_length_mismatch_raises(self):
-        from vid2spatial_pkg.multi_source import encode_multi_source_foa
-        with pytest.raises(ValueError):
-            encode_multi_source_foa([np.zeros(100, np.float32)], [])
+        from vid2spatial_pkg.foa_render import encode_many_to_foa
+        T = 100
+        az, el = self._angles(T, 0.0)
+        with pytest.raises((AssertionError, ValueError, IndexError)):
+            encode_many_to_foa([np.zeros(T, np.float32)], [], [])
+        with pytest.raises(ValueError):          # no sources at all
+            encode_many_to_foa([], [], [])
+        with pytest.raises((AssertionError, ValueError)):   # ragged lengths
+            encode_many_to_foa([np.zeros(T, np.float32), np.zeros(T // 2, np.float32)],
+                               [az, az[:T // 2]], [el, el[:T // 2]])
 
 
 # ── A9: dead vision_refactored branch + unimplemented occlusion estimation ────

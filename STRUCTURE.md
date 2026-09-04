@@ -11,7 +11,7 @@ vid2spatial/
 │   │  ── Pipeline ──
 │   ├── pipeline.py               # End-to-end pipeline orchestration
 │   ├── config.py                 # Configuration management
-│   ├── multi_source.py           # Multi-source FOA mixing
+│   │                             # (multi-source FOA mixing lives in pipeline.py)
 │   │
 │   │  ── Detection & Tracking ──
 │   ├── hybrid_tracker.py         # Adaptive-K hybrid tracker (DINO + YOLO/ByteTrack)

@@ -320,7 +320,7 @@ vid2spatial_pkg/
   bridge_contract.yaml    # OSC wire contract (emitted + bridge-side, see tools/extract_bridge_contract.py)
   config.py               # dataclass configs
   depth_utils.py          # MiDaS / DA-V2 depth backends
-  multi_source.py         # multi-object spatial audio
+  pipeline.py             # multi-object rendering lives here (_render_multi_source)
 
 test/
   test_unit.py            # unit suite (no models)

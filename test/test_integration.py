@@ -31,11 +31,13 @@ Scenarios covered:
 
 import math
 import os
+import socket
 import sys
 import tempfile
 import unittest
 
 import numpy as np
+import pytest
 import soundfile as sf
 
 # Add parent to path
@@ -932,17 +934,103 @@ class TestPipelineMultiSourceOffline(unittest.TestCase):
         # disabled config with no bboxes is the default and must be fine
         self.assertEqual(MultiSourceConfig().n_sources, 0)
 
+    def _run_two_source_end_to_end(self, td, patch):
+        """run_multi_source() for real, with only the TRACKER stubbed out.
+
+        Everything downstream of tracking runs: audio loading, per-source
+        scoring, the export loop and the mixed FOA write.
+        """
+        import soundfile as sf
+        from vid2spatial_pkg.config import OutputConfig
+        wav = os.path.join(td, "in.wav")
+        sf.write(wav, self._tone(440.0), self.SR)
+
+        cfg = self._cfg(enabled=True,
+                        init_bboxes=[(10, 10, 40, 40), (200, 10, 40, 40)])
+        cfg.audio_path = wav
+        cfg.room.disabled = True
+        cfg.output = OutputConfig(foa_path=os.path.join(td, "mix.foa.wav"),
+                                  automation_path=os.path.join(td, "auto.json"))
+        pipe = SpatialAudioPipeline(cfg)
+        trajs = [self._traj(-45.0), self._traj(+45.0)]
+        patch.setattr(pipe, "_compute_trajectory_for_bbox",
+                      lambda bbox, _t=iter(trajs): next(_t))
+        return pipe.run_multi_source(), cfg
+
+    def test_run_multi_source_end_to_end(self):
+        """The whole offline multi path, not a substring of its source."""
+        import json
+        import soundfile as sf
+        with tempfile.TemporaryDirectory() as td:
+            with pytest.MonkeyPatch.context() as patch:
+                res, cfg = self._run_two_source_end_to_end(td, patch)
+
+            self.assertEqual(res["num_sources"], 2)
+            self.assertFalse(res["live_osc_supported"])
+            self.assertEqual(len(res["automation_exports"]), 2)
+
+            # one automation file per ADM object, ids 1..N, from the real loop
+            for i, path in enumerate(sorted(res["automation_exports"])):
+                doc = json.loads(open(path).read())
+                self.assertEqual(doc["object_id"], i + 1)
+                self.assertEqual(doc["osc_address"], f"/adm/obj/{i + 1}/aed")
+                self.assertTrue(path.endswith(f"auto.obj{i + 1}.json"))
+
+            # and one summed FOA on disk, 4 channels, non-silent
+            foa, sr = sf.read(cfg.output.foa_path, always_2d=True)
+            self.assertEqual(sr, self.SR)
+            self.assertEqual(foa.shape[1], 4)
+            self.assertGreater(float(np.max(np.abs(foa))), 1e-3)
+
+    def test_run_multi_source_emits_no_osc(self):
+        """There is no live multi-object path; the offline run must not open one."""
+        with tempfile.TemporaryDirectory() as td:
+            with pytest.MonkeyPatch.context() as patch:
+                sent = []
+                real_socket = socket.socket
+
+                def spy(*a, **kw):
+                    sent.append(a)
+                    return real_socket(*a, **kw)
+
+                patch.setattr(socket, "socket", spy)
+                self._run_two_source_end_to_end(td, patch)
+            self.assertEqual(sent, [], "run_multi_source opened a socket")
+
     def test_run_dispatches_to_multi_source(self):
-        import inspect
-        src = inspect.getsource(SpatialAudioPipeline.run)
-        self.assertIn("multi_source.enabled", src)
-        self.assertIn("run_multi_source", src)
+        """run() must hand an enabled multi-source config to run_multi_source."""
+        with tempfile.TemporaryDirectory() as td:
+            cfg = self._cfg(enabled=True,
+                            init_bboxes=[(10, 10, 40, 40), (200, 10, 40, 40)])
+            cfg.output.foa_path = os.path.join(td, "x.wav")
+            pipe = SpatialAudioPipeline(cfg)
+            called = []
+            with pytest.MonkeyPatch.context() as patch:
+                patch.setattr(pipe, "run_multi_source",
+                              lambda: called.append(True) or {"num_sources": 2})
+                res = pipe.run()
+            self.assertEqual(called, [True], "run() did not dispatch")
+            self.assertEqual(res["num_sources"], 2)
 
     def test_no_live_osc_object_addresses_were_added(self):
         """The engine does not implement /vid2spatial/obj/{N}/...; adding it
-        here would stream N sources into a void."""
-        import inspect
-        from vid2spatial_pkg import osc_sender
-        self.assertNotIn("/obj/", inspect.getsource(osc_sender))
+        here would stream N sources into a void. Asserted on the sender's
+        BEHAVIOUR: every address it puts on the wire for a frame."""
+        from vid2spatial_pkg.osc_sender import OSCSpatialSender
+        sender = OSCSpatialSender(host="127.0.0.1", port=9)
+        seen = []
+
+        class FakeClient:
+            def send_message(self, addr, *a):
+                seen.append(addr)
+
+        sender.client = FakeClient()
+        sender._connected = True
+        sender.config.legacy_spatial = True   # even the opt-in bundle
+        sender.send_frame(az_deg=10.0, el_deg=0.0, dist_m=2.0,
+                          timecode_s=0.0, frame_idx=0)
+        self.assertTrue(seen, "sender emitted nothing; the check is vacuous")
+        for addr in seen:
+            self.assertNotIn("/obj/", addr)
         from vid2spatial_pkg.config import MultiSourceConfig
         self.assertIn("no live multi-object osc path", MultiSourceConfig.__doc__.lower())

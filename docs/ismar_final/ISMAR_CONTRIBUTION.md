@@ -277,7 +277,7 @@ reverb wetness = wet_min + (wet_max - wet_min) * d_rel
 
 1. **더 다양한 object class**: 현재 car/dog/motorcycle → person, ball, bird 등 추가
 2. **실내/실외 구분**: indoor (작은 방 RT60=0.3s) vs outdoor (RT60=0.05s) 구분 처리
-3. **다중 물체**: multi_source.py 기반 2개 이상 sounding object 동시 렌더링
+3. **다중 물체**: `pipeline.SpatialAudioPipeline._render_multi_source` (+ `foa_render.encode_many_to_foa`) 기반 2개 이상 sounding object 동시 렌더링
 4. **Text2Traj 연동**: text description → trajectory → spatial audio (생성형 방향)
 
 ---

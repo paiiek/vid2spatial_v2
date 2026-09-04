@@ -285,7 +285,7 @@
           <input type="checkbox" id="render-binaural" checked disabled> <span style="font-size:0.9em;">Binaural stereo <span style="color:#888; font-size:0.8em;">(always)</span></span>
         </label>
         <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-          <input type="checkbox" id="render-foa"> <span style="font-size:0.9em;">FOA 4ch <span style="color:#888; font-size:0.8em;">(AmbiX W/Y/Z/X)</span></span>
+          <input type="checkbox" id="render-foa"> <span style="font-size:0.9em;">FOA 4ch <span style="color:#888; font-size:0.8em;">(ACN order W/Y/Z/X, N3D &minus;3 dB &mdash; not SN3D, see docs/ISSUES.md I12)</span></span>
         </label>
       </div>
 
@@ -313,6 +313,19 @@
 
     </div>
 
+    <div style="margin:10px 0;">
+      <label style="font-size:0.9em; display:block; margin-bottom:4px;">Depth</label>
+      <select id="depth-backend" style="background:#16213e; border:1px solid #444; color:#eee; padding:6px 10px; border-radius:5px; font-size:0.85em;">
+        <option value="none" selected>none &mdash; fixed distance, fast, no download</option>
+        <option value="midas">MiDaS &mdash; per-frame depth; FIRST RUN DOWNLOADS ~1.3 GB</option>
+      </select>
+      <div style="color:#888; font-size:0.78em; margin-top:4px;">
+        &ldquo;none&rdquo; holds the source at a constant distance, so azimuth and
+        elevation still track but distance does not. MiDaS took 12 min on a
+        60-frame clip here; &ldquo;none&rdquo; took 30 s.
+      </div>
+    </div>
+
     <button class="btn btn-primary" id="run-btn" onclick="runPipeline()">▶ Run Pipeline</button>
     <span class="reset-link" onclick="resetAll()">From scratch</span>
     <div class="status-bar" id="status-bar">Waiting</div>
@@ -335,6 +348,13 @@
       <a id="dl-audio" class="btn btn-secondary" style="text-decoration:none; font-size:0.85em; padding:8px 16px;">⬇ binaural.wav</a>
       <a id="dl-foa" class="btn btn-secondary" style="text-decoration:none; font-size:0.85em; padding:8px 16px; display:none;">⬇ foa.wav (4ch)</a>
       <a id="dl-overlay" class="btn btn-secondary" style="text-decoration:none; font-size:0.85em; padding:8px 16px;">⬇ overlay.mp4</a>
+      <a id="dl-traj" class="btn btn-secondary" style="text-decoration:none; font-size:0.85em; padding:8px 16px;">⬇ traj.json</a>
+    </div>
+    <div style="margin-top:16px;">
+      <label style="font-size:0.9em;">Trajectory (azimuth, degrees &mdash; right of frame is positive)</label>
+      <canvas id="traj-plot" width="900" height="200"
+              style="width:100%; max-width:100%; height:auto; background:#0d0d1a; border-radius:6px; margin-top:6px;"></canvas>
+      <div id="traj-summary" style="color:#888; font-size:0.8em; margin-top:6px;"></div>
     </div>
   </div>
 
@@ -732,6 +752,7 @@ document.getElementById('sk-audio-input').addEventListener('change', function() 
 // ── Video mode ─────────────────────────────────────────────────────────────────
 let jobId = null;
 let uploadedAudioPath = null;  // server-side path for uploaded audio
+let depthBackend = 'none';
 let pollTimer = null;
 
 // ── Drop zone ──────────────────────────────────────────────────────────────────
@@ -961,6 +982,7 @@ function runPipeline() {
   document.getElementById('result-section').style.display = 'none';
   setStatus('queued', 'Added to queue...');
 
+  depthBackend = document.getElementById('depth-backend').value;
   applyOscConfig().then(() => {});
 
   fetch('/api/run', {
@@ -972,6 +994,7 @@ function runPipeline() {
       audio_src: audioSrc,
       mode: mode,
       render_foa: renderFoa,
+      depth_backend: depthBackend,
     })
   })
   .then(r => r.json())
@@ -991,7 +1014,11 @@ function startPolling() {
         const STATUS_LABELS = {
           queued: 'Waiting...',
           extracting_frames: 'Extracting frames...',
-          tracking: 'Tracking object + computing trajectory... (1–2 min)',
+          tracking: depthBackend === 'midas'
+            ? 'Tracking + MiDaS depth. The first MiDaS run downloads ~1.3 GB '
+              + 'before any frame is processed and reports no progress; expect '
+              + 'many minutes. Watch the server console.'
+            : 'Tracking object + computing trajectory (no depth model, constant distance)...',
           rendering: 'Binaural Rendering...',
           rendering_foa: 'FOA 4ch Rendering...',
           rendering_overlay: 'Overlay Video Generating...',
@@ -1051,7 +1078,44 @@ function showResult(result) {
     document.getElementById('dl-foa').style.display = 'none';
   }
 
+  const trajUrl = result.traj_url || `/jobs/${jobId}/traj.json`;
+  document.getElementById('dl-traj').href = trajUrl;
+  document.getElementById('dl-traj').download = 'traj.json';
+  drawTrajectory(trajUrl);
+
   sec.scrollIntoView({ behavior: 'smooth' });
+}
+
+// The trajectory is the thing a creator has to be able to check before
+// trusting the render. It was written to the job directory and served, but
+// nothing in the UI linked to it or drew it.
+function drawTrajectory(url) {
+  const cv  = document.getElementById('traj-plot');
+  const ctx = cv.getContext('2d');
+  const sum = document.getElementById('traj-summary');
+  ctx.clearRect(0, 0, cv.width, cv.height);
+  fetch(url).then(r => r.json()).then(t => {
+    const fr = t.frames || [];
+    if (!fr.length) { sum.textContent = 'no frames in trajectory'; return; }
+    const az = fr.map(f => (f.az || 0) * 180 / Math.PI);
+    const di = fr.map(f => f.dist_m);
+    const lim = Math.max(10, ...az.map(Math.abs));
+    const X = i => (i / Math.max(1, fr.length - 1)) * (cv.width - 40) + 30;
+    const Y = a => cv.height / 2 - (a / lim) * (cv.height / 2 - 12);
+    ctx.strokeStyle = '#333'; ctx.beginPath();
+    ctx.moveTo(30, Y(0)); ctx.lineTo(cv.width - 10, Y(0)); ctx.stroke();
+    ctx.strokeStyle = '#e94560'; ctx.lineWidth = 2; ctx.beginPath();
+    az.forEach((a, i) => i ? ctx.lineTo(X(i), Y(a)) : ctx.moveTo(X(i), Y(a)));
+    ctx.stroke();
+    ctx.fillStyle = '#666'; ctx.font = '11px monospace';
+    ctx.fillText('+' + lim.toFixed(0), 2, 14);
+    ctx.fillText('0', 2, Y(0) + 4);
+    ctx.fillText('-' + lim.toFixed(0), 2, cv.height - 4);
+    const f = x => x.toFixed(2);
+    sum.textContent = fr.length + ' frames @ ' + (t.fps || 30) + ' fps  |  '
+      + 'az ' + f(Math.min(...az)) + '..' + f(Math.max(...az)) + ' deg  |  '
+      + 'dist ' + f(Math.min(...di)) + '..' + f(Math.max(...di)) + ' m';
+  }).catch(e => { sum.textContent = 'could not load trajectory: ' + e; });
 }
 
 function resetAll() {

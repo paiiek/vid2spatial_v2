@@ -31,6 +31,23 @@ Measured through the real bridge handlers over real UDP, a 10 m source:
 20 m. Unifying it on 10 m is an engine-side item. This repo no longer depends
 on that happening.
 
+Re-measured 2026-09-04 through the real bridge and a running
+`spatial_engine_core`, streaming a 10 m source: the default path forwards
+`/adm/obj/1/aed [-30.0, 10.0, 1.0]` and `--legacy-spatial --distance-max-m 20`
+forwards `[-30.0, 10.0, 0.5]`, i.e. the table above still holds exactly.
+
+**The exact engine-side change** (this repo cannot make it; the bridge is owned
+by `spatial_engine`). In `bridge/vid2spatial_osc.py`, `_handle_spatial`:
+
+```python
+-            dist_norm = max(0.0, min(1.0, 1.0 - dist_m / 20.0))
++            dist_norm = max(0.0, min(1.0, 1.0 - dist_m / 10.0))
+```
+
+That single constant is the whole divergence. Until it lands, `--legacy-spatial`
+requires `--distance-max-m 20.0` to agree with the bridge, and the preflight
+now enforces that agreement against the value actually passed (see I13).
+
 ---
 
 ## I2 — Occlusion estimation is not implemented
@@ -194,3 +211,118 @@ almost never means "wrong pairing":
 The gate reaches JSON exports in full. The CSV export carries only the scalar
 `av_confidence` column, not the warning text; see the schema note in
 `vid2spatial_pkg/trajectory_export.py`.
+
+---
+
+## I12 — The exported FOA is ACN/N3D, not the AmbiX (ACN/SN3D) it is labelled
+
+`foa_render.dir_to_foa_acn_sn3d_gains` is named for SN3D and its docstring says
+AmbiX (ACN/SN3D), but it computes
+
+    W = 1/sqrt(2),  X = sqrt(3/2)*x,  Y = sqrt(3/2)*y,  Z = sqrt(3/2)*z
+
+which is ACN/**N3D** scaled by `1/sqrt(2)`, not SN3D (SN3D is `W = 1`,
+`X = x`). Measured on a demo render of a source near the front
+(az 6.7 deg, el 6.8 deg): channel RMS `X/W = 1.72`, and `sqrt(3) = 1.732`.
+Channel ORDER is correct ACN (`W, Y, Z, X`).
+
+Consequence: a decoder that takes the file at its word and applies the SN3D
+convention renders the source about 4.8 dB over-directional, and the bed sits
+3 dB low overall. The repo's own decoders (`foa_to_stereo`, `foa_to_binaural`)
+multiply the first order by `sqrt(3)` on the way in, i.e. they also assume SN3D
+input, so the internal round trip applies the factor twice.
+
+**Not fixed here.** Correcting the encoder changes every rendered sample and
+would break the byte-stability golden (`test/test_geometry_render.py`), which
+is the point of that gate. The label is corrected in the web UI and this entry
+records the measurement; the normalisation change needs its own lane, with the
+golden regenerated deliberately.
+
+---
+
+## I13 — Preflight round-trip listened on a hardcoded 9100 (FIXED in this repo)
+
+**Was.** `tools/attach_engine.py::_check_roundtrip` bound port 9100 no matter
+what the bridge's `--target-port` was. That failed in both directions:
+
+- against a bridge forwarding anywhere else, the probe heard nothing and the
+  preflight refused to attach with "the bridge is not forwarding. Is it
+  running?" — blaming a bridge that was working (reproduced live against a
+  bridge on `--target-port 22060`);
+- in the documented setup the engine itself holds 9100, so the bind failed and
+  the check returned "SKIPPED", meaning it never actually proved the path in
+  the one configuration the README tells you to build.
+
+A second defect sat next to it: `_check_constants` read `OSCConfig()` instead
+of `--distance-max-m`, so `--legacy-spatial --distance-max-m 20.0` still failed
+claiming `sender=10.0 m`. The remedy the error text offered could not be
+carried out.
+
+**Now.** `--forward-port` (default 9100) selects the port to listen on, the
+failure text names it and says it must equal the bridge's `--target-port`, and
+the constants check is given the distance law the stream will actually use.
+Verified live: round-trip OK against a bridge on 22060, and
+`--legacy-spatial --distance-max-m 20.0` now passes and streams.
+
+---
+
+## I14 — No depth backend produced a NEGATIVE distance (FIXED in this repo)
+
+With `depth.backend="none"` (or any failed load) `initialize_depth_backend`
+returns `is_metric=False`, but two fallbacks answered in metres anyway:
+`V2SpatialTracker._estimate_depth` set `f.depth_m = 2.0` for every frame, and
+`vision.estimate_depth_at_bbox` returned `(2.0, True)`. `compute_3d_position`
+then read 2.0 as a relative depth:
+
+    dist_m = 0.5 + (1 - 2.0) * (10.0 - 0.5) = -9.0
+
+Every frame of every source came out at **-9.0 m**. `dist_norm` clamped to 1.0
+and `dist_adm` to 0.0, so the whole scene collapsed onto the listener with no
+warning anywhere; the automation CSVs shipped `dist_m,-9.000000`.
+
+Both fallbacks now answer in the caller's units (`0.5` relative / `2.0` metric).
+The same clip now exports `dist_m,5.250000`.
+
+---
+
+## I15 — Multi-source silently rendered one object N times (FIXED in this repo)
+
+Three defects stacked:
+
+1. `pipeline._compute_trajectory` mapped any unrecognised
+   `vision.tracking.method` to `adaptive_k`. `"yw_sam2"` is not in the
+   recognised list, so asking for the box-driven tracker silently got a
+   detection-driven one that **ignores `init_bbox`**.
+2. Every source therefore tracked the same detected object. Two boxes 314.8 px
+   apart in a 640x360 frame produced byte-identical automation files differing
+   only in `object_id`, and one FOA with two copies of one source summed into
+   one direction. Nothing in the output distinguished this from success.
+3. `_track_v1_bytetrack`'s centre-distance lock had no bound at all
+   (`best_dist = inf`), so with a single detection in frame every `init_bbox`
+   locked onto it however far away, printing the distance but never acting on
+   it.
+
+Now: the method map is explicit and an unknown name raises; `yw_sam2`/`sam2`
+reach the real tracker; the centre-distance lock is gated at the box diagonal
+or 10 percent of the frame diagonal, whichever is larger, and raises
+`NoTrackForInitBBoxError` past it; and `run_multi_source` refuses when two
+sources come out with identical angles. `pipeline._compute_trajectory`'s broad
+`except Exception` used to swallow that error and reroute to the legacy path,
+whose only symptom was `ValueError: Unknown tracking method: v1_bytetrack` —
+naming a method the real tracker supports. It now re-raises.
+
+Verified: the same two boxes now give object 1 at az +6.68 deg and object 2 at
+az -21.01 deg, two distinct automation files, one FOA.
+
+---
+
+## I16 — The demo's rendered level is very low
+
+With the distance fallback corrected (I14) a source sits at 5.25 m, and the
+default distance-gain law puts the demo's binaural output at peak 0.00065
+(about -64 dBFS) for a stem that peaks near 0.02 in the file. It is correct per
+the gain law and effectively inaudible without normalising. The web demo offers
+no output-gain control and no normalisation, so "listen with headphones" gives
+silence on a normal system volume. Changing the law would move every rendered
+sample and is blocked by the byte-stability golden, so this is recorded, not
+fixed.

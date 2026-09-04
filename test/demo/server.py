@@ -354,10 +354,37 @@ def render_overlay_video(frames_dir: Path, trajectory: dict,
     return out_path.exists()
 
 
+
+def trim_audio_to_video(audio_path: str, out_dir: Path, n_frames: int,
+                        fps: float) -> str:
+    """Cut the source audio to the length the trajectory actually covers.
+
+    The renderers run for the whole audio file, not the whole video. A 2 s clip
+    against a 62 s music stem produced a 62 s binaural.wav (24 MB) whose last
+    60 s sat at whatever position the final tracked frame held -- 97% of the
+    deliverable carrying no tracked motion, and a preview video that ffmpeg had
+    to truncate with -shortest. Trim first so the audio and the trajectory
+    describe the same span.
+    """
+    if n_frames <= 0 or fps <= 0:
+        return audio_path
+    dur = n_frames / float(fps)
+    trimmed = out_dir / "audio_trimmed.wav"
+    r = subprocess.run([FFMPEG, "-y", "-i", audio_path, "-t", f"{dur:.6f}",
+                        "-ac", "1", str(trimmed), "-loglevel", "error"],
+                       capture_output=True)
+    if r.returncode != 0 or not trimmed.exists():
+        print(f"[warn] audio trim failed, using full-length audio: "
+              f"{r.stderr.decode()[:200]}")
+        return audio_path
+    return str(trimmed)
+
+
 def run_pipeline(job_id: str, video_path: str, audio_path: str,
                  bbox: tuple, out_dir: Path,
                  mode: str = "accurate",   # "realtime" | "accurate"
-                 render_foa: bool = False):
+                 render_foa: bool = False,
+                 depth_backend: str = "midas"):
     try:
         jobs[job_id]["status"] = "extracting_frames"
         frames_dir = out_dir / "frames"
@@ -396,7 +423,12 @@ def run_pipeline(job_id: str, video_path: str, audio_path: str,
         jobs[job_id]["status"] = "tracking"
 
         from vid2spatial_pkg.v2_spatial_tracker import V2SpatialTracker
-        tracker = V2SpatialTracker(depth_backend="midas")
+        # depth_backend was hardcoded to "midas". On a cold cache that
+        # downloads ~1.3 GB and then runs a DPT model per frame on CPU: a
+        # 60-frame clip took 12.3 min while the UI said "1-2 min". "none"
+        # uses the bbox-area proxy and finished the same clip in under a
+        # minute, so the choice belongs to the operator.
+        tracker = V2SpatialTracker(depth_backend=depth_backend)
 
         # mode 선택: realtime=v1_bytetrack(빠름), accurate=yw_sam2(정확, SAM2)
         if mode == "realtime":
@@ -422,6 +454,17 @@ def run_pipeline(job_id: str, video_path: str, audio_path: str,
         with open(traj_path, "w") as f:
             json.dump(trajectory, f, indent=2)
 
+        # fps is needed BEFORE rendering so the audio can be trimmed to the
+        # span the trajectory covers (it used to be read after the renders).
+        fps_result = subprocess.run([
+            FFMPEG, "-i", video_path, "-loglevel", "error"
+        ], capture_output=True, text=True)
+        import re as _re
+        fps_m = _re.search(r"(\d+(?:\.\d+)?)\s*fps", fps_result.stderr)
+        vid_fps = float(fps_m.group(1)) if fps_m else 30.0
+        audio_path = trim_audio_to_video(
+            audio_path, out_dir, len(trajectory.get("frames", [])), vid_fps)
+
         jobs[job_id]["status"] = "rendering"
 
         # Render binaural
@@ -443,14 +486,6 @@ def run_pipeline(job_id: str, video_path: str, audio_path: str,
             d_rel_attack_s=0.7,
             d_rel_release_s=0.2,
         )
-
-        # Get video fps
-        fps_result = subprocess.run([
-            FFMPEG, "-i", video_path, "-loglevel", "error"
-        ], capture_output=True, text=True)
-        import re as _re
-        fps_m = _re.search(r"(\d+(?:\.\d+)?)\s*fps", fps_result.stderr)
-        vid_fps = float(fps_m.group(1)) if fps_m else 30.0
 
         # Render FOA 4ch (optional)
         foa_path = None
@@ -507,6 +542,7 @@ def run_pipeline(job_id: str, video_path: str, audio_path: str,
             "preview":  str(preview_path),
             "overlay":  str(overlay_path) if overlay_path.exists() else None,
             "traj":     str(traj_path),
+            "traj_url":  f"/jobs/{job_id}/traj.json",
             "n_frames": len(trajectory.get("frames", [])),
         }
 
@@ -679,6 +715,10 @@ class Handler(BaseHTTPRequestHandler):
             bbox_tuple = tuple(int(v) for v in bbox)
             mode       = data.get("mode", "accurate")        # "realtime" | "accurate"
             render_foa = bool(data.get("render_foa", False))
+            depth_backend = data.get("depth_backend", "none")
+            if depth_backend not in ("none", "midas"):
+                self._json({"error": f"unknown depth_backend {depth_backend!r}"}, 400)
+                return
 
             jobs[job_id]["status"] = "queued"
             jobs[job_id]["result"] = None
@@ -687,7 +727,8 @@ class Handler(BaseHTTPRequestHandler):
             t = threading.Thread(
                 target=run_pipeline,
                 args=(job_id, video_path, audio_src, bbox_tuple, job_dir),
-                kwargs={"mode": mode, "render_foa": render_foa},
+                kwargs={"mode": mode, "render_foa": render_foa,
+                        "depth_backend": depth_backend},
                 daemon=True
             )
             t.start()

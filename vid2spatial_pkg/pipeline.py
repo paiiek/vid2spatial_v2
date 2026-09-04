@@ -6,8 +6,9 @@ import os
 from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 
-import librosa
 import numpy as np
+
+from .audio_io import load_audio
 
 from .config import PipelineConfig
 from .vision import compute_trajectory_3d
@@ -783,7 +784,7 @@ class SpatialAudioPipeline:
         paths = ms.audio_paths or [self.config.audio_path] * n
         audios, sr = [], None
         for i, path in enumerate(paths):
-            a, sr = librosa.load(path, sr=sr, mono=True)
+            a, sr = load_audio(path, sr=sr, mono=True)
             self._score_av_confidence(a, sr, trajectories[i])
             audios.append(self._apply_room_ir(a, sr))
 
@@ -855,7 +856,7 @@ class SpatialAudioPipeline:
 
         # Step 2: Load and process audio
         print('\n[2/4] Loading and processing audio...')
-        audio, sr = librosa.load(self.config.audio_path, sr=None, mono=True)
+        audio, sr = load_audio(self.config.audio_path, sr=None, mono=True)
         print(f'      → Loaded {len(audio)} samples at {sr} Hz ({len(audio)/sr:.2f}s)')
 
         self._score_av_confidence(audio, sr, self._trajectory)

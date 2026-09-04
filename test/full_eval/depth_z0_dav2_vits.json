@@ -1,10 +1,21 @@
 {
   "model": "Depth Anything V2 ViT-S (relative), /home/seung/Depth-Anything-V2/checkpoints/depth_anything_v2_vits.pth",
   "alignment": {
+    "method": "least-squares affine on inverse depth",
     "form": "1/z = a*disparity + b, one global fit over all tracks",
     "a": 0.022749441848894554,
     "b": 0.008150253984792286,
-    "note": "NOT metric depth from the model; a global affine fitted against the GT once, the standard affine-invariant protocol. It replaces a per-track oracle z0 with two dataset-wide numbers."
+    "n_free_parameters": 2,
+    "note": "NOT metric depth from the model; a global affine fitted against the GT once, the standard affine-invariant protocol. It replaces a per-track oracle z0 with two dataset-wide numbers. This is a two-parameter scale-AND-shift fit, NOT median scaling."
+  },
+  "alignment_alternative_median_scale": {
+    "method": "median-scale on relative depth (scale only, no shift)",
+    "form": "z = s / disparity, s = median(z_gt) / median(1/disparity)",
+    "n_free_parameters": 1,
+    "z0_abs_rel_mean": 0.26434319821456675,
+    "z0_abs_rel_median": 0.24164674282754844,
+    "z0_delta1": 0.4533333333333333,
+    "note": "Reported for comparison only; the shipped z0 uses the affine."
   },
   "n_tracks": 225,
   "z0_abs_rel_mean": 0.22987725754798208,

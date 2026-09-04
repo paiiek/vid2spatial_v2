@@ -1593,3 +1593,76 @@ class TestComposedDepthZ0(unittest.TestCase):
         self.assertEqual(rep["n_tracks"], 1)
         self.assertIn("composed", rep["z0_source"])
         self.assertIn("z0_est_m", rep["per_track"][one])
+
+
+class TestAudioIOFallback(unittest.TestCase):
+    """load_audio must work on a box where librosa cannot import (I10)."""
+
+    @staticmethod
+    def _tone(path, sr=48000, secs=0.25, channels=1):
+        import soundfile as sf
+        t = np.arange(int(sr * secs)) / sr
+        x = 0.3 * np.sin(2 * np.pi * 440.0 * t)
+        y = np.tile(x[:, None], (1, channels))
+        sf.write(str(path), y, sr, subtype="FLOAT")
+        return x
+
+    def test_fallback_shape_dtype_and_rate(self, tmp_path=None):
+        import tempfile
+        from vid2spatial_pkg import audio_io
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        wav = tmp / "tone.wav"
+        self._tone(wav, sr=48000, channels=2)
+        orig = audio_io._librosa
+        audio_io._librosa = lambda: None            # force the fallback
+        audio_io._WARNED = False
+        try:
+            with pytest.warns(RuntimeWarning, match="soundfile"):
+                y, sr = audio_io.load_audio(wav, sr=16000, mono=True)
+        finally:
+            audio_io._librosa = orig
+        self.assertEqual(sr, 16000)
+        self.assertEqual(y.ndim, 1)
+        self.assertEqual(y.dtype, np.float32)
+        self.assertAlmostEqual(len(y) / sr, 0.25, places=2)
+        self.assertLess(float(np.max(np.abs(y))), 1.0)
+
+    def test_fallback_native_rate_is_exact(self):
+        import tempfile
+        from vid2spatial_pkg import audio_io
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        wav = tmp / "tone.wav"
+        x = self._tone(wav, sr=48000, channels=1)
+        orig = audio_io._librosa
+        audio_io._librosa = lambda: None
+        try:
+            y, sr = audio_io.load_audio(wav, sr=None, mono=True)
+        finally:
+            audio_io._librosa = orig
+        self.assertEqual(sr, 48000)
+        np.testing.assert_allclose(y, x.astype(np.float32), atol=1e-6)
+
+    def test_parity_with_librosa_when_available(self):
+        import tempfile
+        from vid2spatial_pkg import audio_io
+        lib = audio_io._librosa()
+        if lib is None:
+            self.skipTest("librosa unusable in this environment (I10)")
+        tmp = pathlib.Path(tempfile.mkdtemp())
+        wav = tmp / "tone.wav"
+        self._tone(wav, sr=48000, channels=2)
+        try:
+            ref, ref_sr = lib.load(str(wav), sr=16000, mono=True)
+        except ImportError:
+            # librosa imports but numba refuses the installed NumPy (I10)
+            self.skipTest("librosa unusable in this environment (I10)")
+        orig = audio_io._librosa
+        audio_io._librosa = lambda: None
+        try:
+            y, sr = audio_io.load_audio(wav, sr=16000, mono=True)
+        finally:
+            audio_io._librosa = orig
+        self.assertEqual(sr, ref_sr)
+        self.assertEqual(len(y), len(ref))
+        # different resamplers; agreement is on the signal, not bit-exact
+        self.assertLess(float(np.mean(np.abs(y - ref))), 0.02)

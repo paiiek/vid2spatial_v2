@@ -139,8 +139,26 @@ call is at `pipeline.py:728` in `09289ea`. The test suite does not catch it
 because the tests exercise the render helpers directly rather than going
 through `run()`.
 
-**Fix**: pin NumPy below 2.4, upgrade numba, or replace the `librosa.load` call
-with `soundfile.read` plus an explicit resample. The third option drops the
-librosa dependency from the audio-loading path entirely and is the smallest
-change, but it is a behaviour change (librosa resamples on load) and so is left
-as a decision rather than applied here.
+**Fix (CLOSED 2026-09-04)**: `vid2spatial_pkg/audio_io.py` `load_audio` keeps
+`librosa.load` as the primary path, unchanged where librosa works, and falls
+back to `soundfile.read` plus `scipy.signal.resample_poly` when librosa cannot
+be imported *or* raises `ImportError` at call time (numba defers its NumPy check
+to first use, so the failure surfaces there). The fallback matches the defaults
+this pipeline used: mono mixdown, float32, 1-D, native rate when `sr is None`.
+It warns once. It is not bit-identical on the resampling path -- librosa uses
+soxr, the fallback a polyphase FIR -- and at `sr=None` no resampling happens at
+all. `pipeline.py` now calls `load_audio` at both sites.
+
+Verified by a real end-to-end `run()` on this box, first one ever executed here,
+a 60-frame LaSOT clip (`airplane-1`, KCF from the GT first box, `depth=none`)
+with a 2 s 220 Hz tone:
+
+```bash
+python3 run_e2e.py DIR   # PipelineConfig(video=clip.mp4, audio=tone.wav,
+                         #   tracking=kcf init_bbox=(367,101,41,16), depth=none,
+                         #   out foa/stereo/trajectory) -> SpatialAudioPipeline.run()
+```
+
+Outputs: `out.traj.json` 60 frames (38971 B), `out.foa.wav` (96000, 4) @ 48 kHz
+(1536104 B), `out.stereo.wav` (384044 B). The fallback warning fires at
+`pipeline.py:859`, so the fallback is what carried the run.

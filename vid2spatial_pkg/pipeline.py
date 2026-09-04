@@ -3,7 +3,6 @@ Spatial audio pipeline orchestration.
 """
 import json
 import os
-from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 
 import librosa
@@ -164,6 +163,57 @@ class SpatialAudioPipeline:
                 print(f'[info] Outlier clipping: {key} clamped {clipped} frames to ≤{hi:.2f}m (IQR fence k={iqr_k})')
         return frames
 
+    def _resolve_camera_fov(self):
+        """Resolve the horizontal FOV to use, with provenance (gap item A2).
+
+        Reads the container metadata unless the user pinned a FOV explicitly.
+        Falls back to config.vision.camera.fov_deg (60 deg by default) with a
+        loud warning, and records where the number came from so a downstream
+        result is auditable.
+        """
+        from .camera_intrinsics import resolve_fov
+
+        cam = self.config.vision.camera
+        info = resolve_fov(
+            self.config.video_path,
+            explicit_fov_deg=cam.fov_deg if cam.fov_explicit else None,
+            focal_35mm=cam.focal_35mm,
+            default_fov_deg=cam.fov_deg,
+            use_metadata=cam.fov_from_metadata,
+            # only shout about the fallback when we actually went looking
+            warn=cam.fov_from_metadata,
+        )
+        cam.fov_deg = float(info.fov_deg)
+        cam.fov_source = info.source
+        cam.fov_detail = info.detail
+        if not info.is_default:
+            print(f'[info] camera FOV {info.fov_deg:.2f} deg from {info.source} '
+                  f'({info.detail})')
+        return info
+
+    def _stamp_intrinsics(self, traj: Dict[str, Any]) -> Dict[str, Any]:
+        """Record FOV provenance (and camera yaw, when estimated) in the traj."""
+        cam = self.config.vision.camera
+        intr = traj.setdefault("intrinsics", {})
+        intr["fov_deg"] = float(cam.fov_deg)
+        intr["fov_source"] = cam.fov_source
+        intr["fov_detail"] = cam.fov_detail
+        intr["motion_mode"] = cam.motion_mode
+        return traj
+
+    def _apply_camera_motion(self, traj: Dict[str, Any]) -> Dict[str, Any]:
+        """Estimate camera yaw and, in world_frame mode, subtract it (A3)."""
+        cam = self.config.vision.camera
+        if cam.motion_mode == "camera_frame" and not cam.estimate_camera_motion:
+            return traj
+        from .camera_motion import annotate_trajectory_with_camera_motion
+        return annotate_trajectory_with_camera_motion(
+            traj, self.config.video_path,
+            fov_deg=cam.fov_deg,
+            mode=cam.motion_mode,
+            sample_stride=cam.sample_stride,
+        )
+
     def _compute_trajectory(self) -> Dict[str, Any]:
         """
         Compute or load 3D trajectory from video.
@@ -199,6 +249,18 @@ class SpatialAudioPipeline:
                     measurement_noise=0.1,
                 )
 
+            # FOV provenance for a precomputed trajectory comes from the file
+            # itself, not from the container (A2).
+            intr = traj.setdefault("intrinsics", {})
+            intr.setdefault("fov_deg", self.config.vision.camera.fov_deg)
+            intr.setdefault("fov_source", "trajectory_json")
+            intr.setdefault("fov_detail", str(self.config.trajectory_json))
+            self.config.vision.camera.fov_deg = float(intr["fov_deg"])
+            self.config.vision.camera.fov_source = str(intr["fov_source"])
+            self.config.vision.camera.fov_detail = str(intr["fov_detail"])
+            intr["motion_mode"] = self.config.vision.camera.motion_mode
+            traj = self._apply_camera_motion(traj)
+
             # Save post-processed trajectory to output path (if requested)
             if self.config.output.trajectory_path:
                 print(f'[info] Saving processed trajectory to {self.config.output.trajectory_path}')
@@ -206,6 +268,10 @@ class SpatialAudioPipeline:
                     json.dump(traj, fh, indent=2)
 
             return traj
+
+        # Resolve the camera FOV from container metadata before any projection
+        # happens; everything downstream reads config.vision.camera.fov_deg (A2).
+        self._resolve_camera_fov()
 
         # Build vision components
         print('[info] Computing trajectory from video...')
@@ -277,6 +343,9 @@ class SpatialAudioPipeline:
                         traj['fps'] = 25.0
                     else:
                         traj['fps'] = 30.0
+
+                traj = self._stamp_intrinsics(traj)
+                traj = self._apply_camera_motion(traj)
 
                 # Save if requested
                 if self.config.output.trajectory_path:
@@ -367,6 +436,12 @@ class SpatialAudioPipeline:
             else:
                 traj['fps'] = 30.0
 
+        # Same provenance and camera-motion treatment as the V2 tracker path;
+        # the legacy fallback must not produce a trajectory that is missing
+        # them (2026-09-04 review, MEDIUM).
+        traj = self._stamp_intrinsics(traj)
+        traj = self._apply_camera_motion(traj)
+
         # Save if requested
         if self.config.output.trajectory_path:
             print(f'[info] Saving trajectory to {self.config.output.trajectory_path}')
@@ -406,7 +481,7 @@ class SpatialAudioPipeline:
         # Try PRA backend
         if self.config.room.backend in ("auto", "pra"):
             try:
-                from .irgen import synthesize_mono_rir, fft_convolve
+                from .irgen import synthesize_mono_rir
                 print('[info] Synthesizing room IR with pyroomacoustics...')
                 rir = synthesize_mono_rir(
                     (Lx, Ly, Lz),

@@ -6,9 +6,28 @@ Vid2Spatial v3 정량 평가 (ISMAR 2026)
 22개 LaSOT 클립 — e2e_final (yw_sam2, threshold=0.99) traj.json 기준
 
 Metrics:
-  - AzMAE: Mean Absolute Error of predicted azimuth vs GT (degrees)
+  - PixelAzMAE: Mean Absolute Error of predicted azimuth vs GT (degrees)
   - Az Range: range of predicted azimuth trajectory (degrees)
   - El MAE: Mean Absolute Error of predicted elevation vs GT (degrees)
+
+WHAT PixelAzMAE IS, EXACTLY (renamed 2026-09-04, gap item A1)
+-------------------------------------------------------------
+The GT azimuth below and the pipeline's predicted azimuth use the SAME pinhole
+formula with the SAME assumed FOV (60 deg).  The projection model therefore
+cancels, and the metric reduces to a monotone reparameterisation of the
+bbox-centre pixel error:
+
+    PixelAzMAE = mean | atan2(dx_pred/f) - atan2(dx_gt/f) |,  f = W/(2 tan(fov/2))
+
+It measures TRACKING accuracy in angular units.  It cannot see an FOV error, a
+principal-point error, lens distortion, or camera motion, because all of those
+cancel on both sides.  It is not a spatial-accuracy number.
+
+For a physically independent azimuth accuracy, use tools/eval_azimuth_kitti.py,
+which takes ground truth from KITTI 3D label centres (atan2(x_cam, z_cam)) and
+makes no projection assumption.  On 21819 KITTI detections that gives AzMAE
+3.785 deg for the deployed 60 deg assumption, versus 0.412 deg with the true
+intrinsics (reports/azimuth_kitti_2026-09-04.md).
 
 GT convention: LaSOT bbox [x, y, w, h] (LTWH, pixel), 1-indexed frames
 Az formula: az = atan2(cx_px - W/2, f)  where f = W / (2*tan(fov/2))
@@ -157,7 +176,7 @@ def main():
         results.append(r)
         status = r.get("status", "?")
         if status == "ok":
-            print(f"  {clip:20s} AzMAE={r['az_mae']:5.2f}° ElMAE={r['el_mae']:5.2f}° "
+            print(f"  {clip:20s} PixelAzMAE={r['az_mae']:5.2f}° ElMAE={r['el_mae']:5.2f}° "
                   f"AzRange(pred/gt)={r['az_range_pred']:.1f}°/{r['az_range_gt']:.1f}°")
         else:
             print(f"  {clip:20s} [{status}]")
@@ -168,8 +187,8 @@ def main():
     el_maes = [r["el_mae"] for r in ok]
     print(f"\n{'='*60}")
     print(f"Overall ({len(ok)}/22 clips):")
-    print(f"  Mean AzMAE = {np.mean(az_maes):.2f}° ± {np.std(az_maes):.2f}°")
-    print(f"  Median AzMAE = {np.median(az_maes):.2f}°")
+    print(f"  Mean PixelAzMAE = {np.mean(az_maes):.2f}° ± {np.std(az_maes):.2f}°")
+    print(f"  Median PixelAzMAE = {np.median(az_maes):.2f}°")
     print(f"  Mean ElMAE = {np.mean(el_maes):.2f}° ± {np.std(el_maes):.2f}°")
 
     # Per-category
@@ -180,13 +199,13 @@ def main():
         cr = [r for r in ok if r.get("cat") == cat]
         m = np.mean([r["az_mae"] for r in cr])
         cat_stats[cat] = (m, len(cr))
-        print(f"  {cat:12s}: n={len(cr)}, mean AzMAE={m:.2f}°")
+        print(f"  {cat:12s}: n={len(cr)}, mean PixelAzMAE={m:.2f}°")
 
     # COCO vs non-COCO
     coco_r = [r for r in ok if r.get("coco")]
     noncoco_r = [r for r in ok if not r.get("coco")]
-    print(f"\nCOCO ({len(coco_r)} clips):     mean AzMAE = {np.mean([r['az_mae'] for r in coco_r]):.2f}°")
-    print(f"Non-COCO ({len(noncoco_r)} clips):  mean AzMAE = {np.mean([r['az_mae'] for r in noncoco_r]):.2f}°")
+    print(f"\nCOCO ({len(coco_r)} clips):     mean PixelAzMAE = {np.mean([r['az_mae'] for r in coco_r]):.2f}°")
+    print(f"Non-COCO ({len(noncoco_r)} clips):  mean PixelAzMAE = {np.mean([r['az_mae'] for r in noncoco_r]):.2f}°")
 
     # Save markdown report
     OUT_DOC.parent.mkdir(parents=True, exist_ok=True)
@@ -215,17 +234,17 @@ def write_report(results, ok, cat_stats, coco_r, noncoco_r):
         f"| Metric | Value |",
         f"|--------|-------|",
         f"| Clips evaluated | {len(ok)}/22 |",
-        f"| **Mean AzMAE** | **{np.mean(az_maes):.2f}° ± {np.std(az_maes):.2f}°** |",
-        f"| Median AzMAE | {np.median(az_maes):.2f}° |",
-        f"| Min AzMAE | {np.min(az_maes):.2f}° |",
-        f"| Max AzMAE | {np.max(az_maes):.2f}° |",
+        f"| **Mean PixelAzMAE** | **{np.mean(az_maes):.2f}° ± {np.std(az_maes):.2f}°** |",
+        f"| Median PixelAzMAE | {np.median(az_maes):.2f}° |",
+        f"| Min PixelAzMAE | {np.min(az_maes):.2f}° |",
+        f"| Max PixelAzMAE | {np.max(az_maes):.2f}° |",
         f"| Mean ElMAE | {np.mean(el_maes):.2f}° ± {np.std(el_maes):.2f}° |",
         f"",
         f"---",
         f"",
         f"## Per-Clip Results",
         f"",
-        f"| Clip | Category | COCO | AzMAE | ElMAE | AzRange (pred) | AzRange (GT) | N |",
+        f"| Clip | Category | COCO | PixelAzMAE | ElMAE | AzRange (pred) | AzRange (GT) | N |",
         f"|------|----------|------|-------|-------|----------------|--------------|---|",
     ]
 
@@ -246,7 +265,7 @@ def write_report(results, ok, cat_stats, coco_r, noncoco_r):
         f"",
         f"## Per-Category Summary",
         f"",
-        f"| Category | N | Mean AzMAE |",
+        f"| Category | N | Mean PixelAzMAE |",
         f"|----------|---|-----------|",
     ]
     for cat, (m, n) in cat_stats.items():
@@ -258,21 +277,26 @@ def write_report(results, ok, cat_stats, coco_r, noncoco_r):
         f"",
         f"## COCO vs Non-COCO (C1 Claim: Open-Vocabulary Coverage)",
         f"",
-        f"| Subset | N | Mean AzMAE |",
+        f"| Subset | N | Mean PixelAzMAE |",
         f"|--------|---|-----------|",
         f"| COCO categories | {len(coco_r)} | {np.mean([r['az_mae'] for r in coco_r]):.2f}° |",
         f"| Non-COCO (drone, guitar) | {len(noncoco_r)} | {np.mean([r['az_mae'] for r in noncoco_r]):.2f}° |",
         f"",
         f"> **C1 Claim**: Open-vocabulary tracking (YOLO-World) successfully extends to non-COCO categories",
-        f"> (drone, guitar) with comparable AzMAE to COCO categories, demonstrating generalization.",
+        f"> (drone, guitar) with comparable PixelAzMAE to COCO categories, demonstrating generalization.",
         f"",
         f"---",
         f"",
         f"## Notes",
         f"",
+        f"- **PixelAzMAE identity**: GT and prediction share the same pinhole model and the",
+        f"  same assumed FOV, so the projection cancels and this metric is a monotone",
+        f"  reparameterisation of bbox-centre pixel error. It is a tracking metric in angular",
+        f"  units, not a spatial-accuracy metric. For an independent geometric check see",
+        f"  `tools/eval_azimuth_kitti.py` / `reports/azimuth_kitti_2026-09-04.md`.",
         f"- GT azimuth derived from LaSOT bbox center: `az = atan2(cx_px - W/2, focal_length)`",
         f"- Focal length: `f = W / (2*tan(fov/2))`, fov=60° → f≈1108.5px @ 1280px width",
-        f"- Frames with absent GT (bbox [0,0,0,0]) excluded from AzMAE computation",
+        f"- Frames with absent GT (bbox [0,0,0,0]) excluded from PixelAzMAE computation",
         f"- All 300 frames (12s @ 25fps) per clip used",
         f"",
         f"---",

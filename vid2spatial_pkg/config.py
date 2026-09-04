@@ -2,8 +2,7 @@
 Configuration classes for vid2spatial pipeline.
 """
 from dataclasses import dataclass, field
-from typing import Optional, Tuple, List
-from pathlib import Path
+from typing import Optional, Tuple
 
 
 @dataclass
@@ -11,6 +10,29 @@ class CameraConfig:
     """Camera and video processing configuration."""
     fov_deg: float = 60.0
     sample_stride: int = 1
+
+    # --- FOV provenance (gap item A2) -------------------------------------
+    # fov_deg above is only the FALLBACK. When fov_from_metadata is True the
+    # pipeline asks camera_intrinsics.resolve_fov() to read the real FOV from
+    # the container (sidecar JSON / exiftool / ffprobe) and warns loudly when
+    # it has to fall back. The value actually used and where it came from are
+    # written into the trajectory JSON as intrinsics.fov_deg / fov_source.
+    # OFF by default: turning it on can change the FOV a clip renders with, and
+    # therefore every azimuth, so it is an explicit opt-in rather than a silent
+    # behaviour change on existing pipelines (2026-09-04 review, MEDIUM).
+    fov_from_metadata: bool = False
+    fov_explicit: bool = False          # user passed --fov-deg: metadata is skipped
+    focal_35mm: Optional[float] = None  # --focal-35mm, converted to a FOV
+    fov_source: str = "default"         # filled in by the pipeline at run time
+    fov_detail: str = ""
+
+    # --- camera-motion compensation (gap item A3) -------------------------
+    # "camera_frame": azimuth is relative to the camera (the listener turns
+    #                 with the camera). This is the historical behaviour.
+    # "world_frame":  estimated camera yaw is subtracted, so a stationary
+    #                 source stays put in the sound field during a pan.
+    motion_mode: str = "camera_frame"
+    estimate_camera_motion: bool = False  # implied by motion_mode="world_frame"
 
 
 @dataclass
@@ -193,6 +215,14 @@ class PipelineConfig:
                 camera=CameraConfig(
                     fov_deg=args.fov_deg,
                     sample_stride=args.stride,
+                    fov_from_metadata=getattr(args, "fov_from_metadata", True),
+                    # An explicitly passed FOV must win over container metadata.
+                    # argparse cannot distinguish "user typed 60" from "default
+                    # 60", so anything other than the library default counts.
+                    fov_explicit=(float(args.fov_deg) != CameraConfig.fov_deg),
+                    focal_35mm=getattr(args, "focal_35mm", None),
+                    motion_mode=getattr(args, "motion_mode", "camera_frame"),
+                    estimate_camera_motion=getattr(args, "estimate_camera_motion", False),
                 ),
                 tracking=TrackingConfig(
                     method=args.method,
@@ -294,3 +324,51 @@ class PipelineConfig:
             data["output"] = OutputConfig(**output_data)
 
         return cls(**data)
+
+
+def add_camera_cli_args(parser):
+    """Register the 2026-09-04 camera/geometry flags on an argparse parser.
+
+    `PipelineConfig.from_args` reads these off the namespace, but until an entry
+    point declares them there is no way to reach `world_frame` rendering or the
+    metadata FOV path from a command line. Any front end that builds a
+    PipelineConfig should call this on its parser.
+
+    Every flag is opt-in and leaves the default render unchanged.
+    """
+    g = parser.add_argument_group("camera / geometry (2026-09-04)")
+    g.add_argument("--focal-35mm", type=float, default=None, dest="focal_35mm",
+                   help="35 mm-equivalent focal length; overrides --fov-deg "
+                        "(27 mm is about 67 deg, 50 mm about 40 deg)")
+    g.add_argument("--fov-from-metadata", action="store_true",
+                   dest="fov_from_metadata",
+                   help="read the horizontal FOV from the container "
+                        "(sidecar JSON / exiftool / ffprobe) instead of assuming "
+                        "%(default)s deg; off by default because it can change "
+                        "every azimuth" % {"default": CameraConfig.fov_deg})
+    g.add_argument("--motion-mode", choices=("camera_frame", "world_frame"),
+                   default="camera_frame", dest="motion_mode",
+                   help="camera_frame (default): the listener turns with the "
+                        "camera. world_frame: subtract estimated camera yaw so a "
+                        "world-static source stays put during a pan")
+    g.add_argument("--estimate-camera-motion", action="store_true",
+                   dest="estimate_camera_motion",
+                   help="estimate and record camera yaw even in camera_frame mode")
+    return parser
+
+
+def add_render_cli_args(parser):
+    """Register the 2026-09-04 render flags. All opt-in; see README."""
+    g = parser.add_argument_group("render options (2026-09-04)")
+    g.add_argument("--hrir-interp", choices=("nearest", "barycentric"),
+                   default="nearest", dest="hrir_interp",
+                   help="nearest (default, what every shipped stimulus used) or "
+                        "barycentric interpolation over the 3 nearest SOFA "
+                        "directions")
+    g.add_argument("--confidence-gate", action="store_true",
+                   dest="confidence_gate",
+                   help="freeze azimuth and duck toward diffuse during lost "
+                        "tracker episodes")
+    g.add_argument("--doppler", action="store_true", dest="doppler",
+                   help="pitch-shift by the radial velocity of the source")
+    return parser

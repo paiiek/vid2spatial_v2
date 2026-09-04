@@ -1,0 +1,26 @@
+{
+  "sofa": "/home/seung/mmhoa/spatial_engine-proto/.localdeps/libmysofa-v1.3.2/share/MIT_KEMAR_normal_pinna.sofa",
+  "grid_spacing_deg": 5.0,
+  "arc_deg": 90.0,
+  "duration_s": 4.0,
+  "modes": {
+    "nearest": {
+      "n_windows": 395,
+      "step_mean_deg": 0.9235826177187653,
+      "step_max_deg": 52.40217690246935,
+      "step_std_deg": 4.133073004121049,
+      "frac_steps_below_quarter_grid": 0.9111675126903553,
+      "mean_abs_second_diff_deg": 1.7934886050396803,
+      "recovered_range_deg": 90.00000000024556
+    },
+    "barycentric": {
+      "n_windows": 395,
+      "step_mean_deg": 0.36799570577878205,
+      "step_max_deg": 12.062830673066856,
+      "step_std_deg": 1.1316716178000257,
+      "frac_steps_below_quarter_grid": 0.9593908629441624,
+      "mean_abs_second_diff_deg": 0.5048199378500048,
+      "recovered_range_deg": 89.99407246287774
+    }
+  }
+}

@@ -394,6 +394,200 @@ def apply_distance_gain_lpf(x: np.ndarray, sr: int, dist_s: np.ndarray,
     return y_lp.astype(np.float32)
 
 
+# Atmospheric absorption, ISO 9613-1:1993 Table 1, at 20 degC / 50 % RH /
+# 101.325 kPa -- the standard's reference condition and the one the octave-band
+# figures below are tabulated for. Values are dB per kilometre; divided by 1000
+# for dB/m. The 16 kHz entry is extrapolated (the table stops at 8 kHz) and is
+# only ever reached by the clamp in air_absorption_cutoff_hz.
+ISO9613_FREQ_HZ = np.array([125.0, 250.0, 500.0, 1000.0, 2000.0,
+                            4000.0, 8000.0, 16000.0])
+ISO9613_ALPHA_DB_PER_KM = np.array([0.38, 1.13, 2.36, 4.66, 9.89,
+                                    29.67, 105.29, 355.0])
+SPEED_OF_SOUND_M_S = 343.0
+
+
+def air_absorption_cutoff_hz(dist_m: np.ndarray, *, drop_db: float = 3.0,
+                             f_min: float = 500.0,
+                             f_max: float = 18000.0) -> np.ndarray:
+    """Frequency at which ISO 9613-1 air absorption reaches `drop_db` (gap A7).
+
+    Used as the cutoff of a one-pole low-pass, so the rendered HF roll-off
+    follows the published atmospheric attenuation instead of an invented curve.
+    Interpolation is log-log, which is where the ISO table is close to straight.
+    """
+    d = np.maximum(np.asarray(dist_m, dtype=np.float64), 1e-3)
+    alpha_target = float(drop_db) / d          # dB/m needed to lose drop_db
+    log_f = np.log(ISO9613_FREQ_HZ)
+    log_a = np.log(ISO9613_ALPHA_DB_PER_KM / 1000.0)
+    fc = np.exp(np.interp(np.log(alpha_target), log_a, log_f))
+    return np.clip(fc, f_min, f_max).astype(np.float32)
+
+
+def _timevarying_onepole(x: np.ndarray, fc: np.ndarray, sr: int,
+                         block: Optional[int] = None) -> np.ndarray:
+    """One-pole low-pass with a time-varying cutoff, filtered block-wise.
+
+    The sample-by-sample Python loop this replaces is O(T) interpreted calls and
+    dominates the render cost. `fc` here is always box-smoothed over 0.5 s before
+    it arrives, so holding it constant across a block of 20 ms -- the default,
+    which scales with the sample rate rather than being a fixed sample count --
+    is well below the resolution of the control signal. scipy's lfilter carries
+    the filter state `zi` across blocks, so the result is continuous: there is no
+    per-block reset and no click at the boundaries.
+
+    Measured on 5 s of noise at 48 kHz over a 1 m -> 40 m air-absorption sweep:
+    about 46x faster than the loop for a peak deviation of 0.65 % of signal RMS.
+    Only apply_physical_distance uses this; apply_distance_gain_lpf keeps its
+    original loop so that the legacy render stays bit-exact.
+    """
+    from scipy.signal import lfilter
+
+    T = x.shape[0]
+    if T == 0:
+        return x.astype(np.float32)
+    if block is None:
+        block = max(128, int(sr * 0.020))   # 20 ms, sample-rate independent
+    two_pi = 2.0 * np.pi
+    out = np.empty(T, dtype=np.float32)
+    zi = np.zeros(1, dtype=np.float64)
+    for start in range(0, T, block):
+        end = min(start + block, T)
+        # the block's cutoff: the mean of an already heavily smoothed control
+        f = float(np.mean(fc[start:end]))
+        a = (two_pi * f) / (two_pi * f + sr)
+        seg, zi = lfilter([a], [1.0, -(1.0 - a)], x[start:end].astype(np.float64),
+                          zi=zi)
+        out[start:end] = seg.astype(np.float32)
+    return out
+
+
+def apply_physical_distance(x: np.ndarray, sr: int, dist_s: np.ndarray, *,
+                            d_ref_m: float = 1.0, gain_floor: float = 0.02,
+                            air_absorption: bool = True) -> np.ndarray:
+    """Direct-path attenuation by the actual inverse-distance law (gap item A7).
+
+    The legacy curve maps d_rel linearly into [gain_min, gain_max] = [0.3, 1.0],
+    a 10.5 dB span across an entire scene — roughly a third of the physical
+    range over 6-60 m, and untethered from any real distance.  Here the direct
+    gain is `d_ref / max(d, d_ref)`, i.e. the textbook -6 dB per doubling, with
+    a floor so a far source does not vanish, plus ISO 9613-1 air absorption as a
+    distance-dependent one-pole low-pass.
+
+    The reverb half of the physical law lives in build_physical_wet_curve():
+    holding the reverb send constant in absolute level is what makes the
+    direct-to-reverberant ratio fall as 1/d, which is the distance cue that
+    survives when intensity is unreliable.
+    """
+    T = x.shape[0]
+    d = np.maximum(np.asarray(dist_s[:T], dtype=np.float64), 1e-6)
+    g = np.clip(float(d_ref_m) / np.maximum(d, float(d_ref_m)),
+                float(gain_floor), 1.0).astype(np.float32)
+    y = (x[:T].astype(np.float32) * g).astype(np.float32)
+
+    if not air_absorption:
+        return y
+
+    fc = air_absorption_cutoff_hz(d)
+    from scipy.ndimage import uniform_filter1d
+    fc = uniform_filter1d(fc, size=max(1, int(sr * 0.5)), mode="nearest").astype(np.float32)
+
+    out = _timevarying_onepole(y, fc, sr)
+    peak = float(np.max(np.abs(out)) + 1e-9)
+    if peak > 1.0:
+        out = out / (peak * 1.01)
+    return out.astype(np.float32)
+
+
+def physical_direct_gain(dist_m, *, d_ref_m: float = 1.0,
+                         gain_floor: float = 0.02) -> np.ndarray:
+    """The A7 direct-path gain curve on its own (for tests and plots)."""
+    d = np.maximum(np.asarray(dist_m, dtype=np.float64), 1e-6)
+    return np.clip(float(d_ref_m) / np.maximum(d, float(d_ref_m)),
+                   float(gain_floor), 1.0).astype(np.float32)
+
+
+def build_physical_wet_curve(dist_s: np.ndarray, *, d_ref_m: float = 1.0,
+                             gain_floor: float = 0.02,
+                             reverb_send: float = 0.02,
+                             wet_cap: float = 0.9) -> np.ndarray:
+    """Wet mix that holds the reverb ABSOLUTE level constant (gap item A7).
+
+    The renderer mixes `out = (1 - wet) * dry_attenuated + wet * reverb(dry_attenuated)`,
+    and the reverb of an attenuated dry is itself attenuated by the same g. So to
+    keep the reverberant field at a constant absolute level K the wet mix must be
+
+        wet(d) = K / g(d)
+
+    which makes the direct term (1 - K/g) * g = g - K and therefore
+
+        DRR(d) = (g(d) - K) / K   ~   1/d
+
+    i.e. the direct-to-reverberant ratio falls at the physical rate by
+    construction rather than by a separately-tuned ramp.
+
+    LIMIT: wet is clamped at `wet_cap`, which with the defaults (K = 0.02,
+    d_ref = 1 m, cap 0.9) is reached at g = K / cap = 0.0222, i.e. about 45 m.
+    Beyond that the reverb can no longer be held at a constant absolute level
+    without the direct path going negative, so DRR flattens and the law stops
+    being physical. Measured DRR slope is -6.46 dB/doubling over 1-8 m and
+    steepens toward the cap; see reports/render_lane_2026-09-04.md. Raise
+    `wet_cap` or lower `reverb_send` to push the knee further out.
+    """
+    g = physical_direct_gain(dist_s, d_ref_m=d_ref_m, gain_floor=gain_floor)
+    wet = np.clip(float(reverb_send) / np.maximum(g, 1e-6), 0.0, float(wet_cap))
+    return wet.astype(np.float32)
+
+
+def apply_doppler(x: np.ndarray, sr: int, dist_s: np.ndarray, *,
+                  max_ratio: float = 0.25,
+                  c_m_s: float = SPEED_OF_SOUND_M_S) -> np.ndarray:
+    """Resample by the radial velocity implied by the distance track (gap A14).
+
+    The RTS smoother already carries `v_dist` in its state and then discards it;
+    the same quantity is recoverable from the distance series the renderer
+    already has.  For a source moving at radial velocity v (positive = receding)
+    the received frequency is f * c / (c + v), so the read pointer advances at
+
+        rate[n] = 1 - v[n] / c        (first order in v/c)
+
+    Receding therefore reads the source slower and drops the pitch. The rate is
+    clamped to [1 - max_ratio, 1 + max_ratio] so a depth glitch cannot produce a
+    siren. Opt-in: `doppler=True` on the render entry points.
+    """
+    T = x.shape[0]
+    d = np.asarray(dist_s[:T], dtype=np.float64)
+    if T < 2:
+        return x.astype(np.float32)
+    v = np.gradient(d) * float(sr)                     # metres per second
+    rate = np.clip(1.0 - v / float(c_m_s),
+                   1.0 - float(max_ratio), 1.0 + float(max_ratio))
+    read_pos = np.cumsum(rate) - rate[0]
+
+    # TAIL. An APPROACHING source has rate > 1, so the read pointer advances
+    # faster than the output is written and runs off the end of the input before
+    # the output is full. Clamping it there would hold the final sample, which is
+    # a DC step and an audible thump. The run-off region is faded to silence
+    # instead, over `fade_n` samples ending at the moment the pointer leaves the
+    # input, and is silent thereafter. A RECEDING source has rate < 1 and simply
+    # does not consume the whole input, which needs no handling. At the +/-25 %
+    # clamp the run-off costs at most the last 20 % of a clip; a real trajectory
+    # rarely approaches at a constant fraction of the speed of sound for its
+    # whole duration.
+    over = np.nonzero(read_pos > (T - 1))[0]
+    n_valid = int(over[0]) if over.size else T
+    read_pos = np.clip(read_pos, 0.0, T - 1)
+    out = np.interp(read_pos, np.arange(T, dtype=np.float64),
+                    x[:T].astype(np.float64))
+
+    if n_valid < T:
+        fade_n = min(int(0.020 * sr), n_valid)
+        if fade_n > 0:
+            ramp = 0.5 * (1.0 + np.cos(np.linspace(0.0, np.pi, fade_n)))
+            out[n_valid - fade_n:n_valid] *= ramp
+        out[n_valid:] = 0.0
+    return out.astype(np.float32)
+
+
 def build_wet_curve_from_dist_occ(d_rel_s: np.ndarray,
                                   occ_s: np.ndarray | None = None,
                                   *,
@@ -522,19 +716,124 @@ def encode_many_to_foa(monolist: List[np.ndarray], az_list: List[np.ndarray], el
     return acc.astype(np.float32)
 
 
+LOST_CONF_THRESHOLD = 0.5
+LOST_DUCK_DB = -9.0
+LOST_DIFFUSE_BOOST = 0.35
+LOST_FADE_MS = 80.0
+
+
+def freeze_lost_frames(frames: List[Dict], conf_threshold: float = LOST_CONF_THRESHOLD):
+    """Hold az/el at the last confident value across lost episodes (gap item A16).
+
+    FAILURE_MODE_ANALYSIS.json puts frac_lost at 4.0 % over 55 episodes, with
+    azimuth error 10.06 deg while lost against 0.757 deg while good.  The
+    renderer had no notion of "lost": it interpolated straight through and
+    panned confidently to a wrong place.  Freezing is the conservative choice --
+    a source that stops moving is far less objectionable than one that lunges.
+
+    Frames before the first confident frame are back-filled from it.  A frame
+    with no "confidence" key counts as confident (1.0), so a trajectory that
+    never recorded confidence is passed through untouched.
+
+    Returns (frames_out, stats) where frames_out is a new list of shallow
+    copies and stats has n_lost / n_episodes / frac_lost.
+    """
+    conf = np.array([float(f.get("confidence", 1.0)) for f in frames], dtype=np.float64)
+    lost = conf < float(conf_threshold)
+    stats = {
+        "n_frames": int(len(frames)),
+        "n_lost": int(lost.sum()),
+        "frac_lost": float(lost.mean()) if len(frames) else 0.0,
+        "n_episodes": int(np.count_nonzero(np.diff(np.concatenate(([False], lost))) & lost)),
+        "conf_threshold": float(conf_threshold),
+    }
+    if not lost.any():
+        return list(frames), stats
+
+    out = [dict(f) for f in frames]
+    first_ok = int(np.argmax(~lost)) if (~lost).any() else 0
+    hold_az = float(out[first_ok].get("az", 0.0))
+    hold_el = float(out[first_ok].get("el", 0.0))
+    for i, f in enumerate(out):
+        if lost[i]:
+            f["az_measured"] = float(f.get("az", 0.0))
+            f["el_measured"] = float(f.get("el", 0.0))
+            f["az"] = hold_az
+            f["el"] = hold_el
+            f["lost"] = True
+        else:
+            hold_az = float(f.get("az", hold_az))
+            hold_el = float(f.get("el", hold_el))
+            f["lost"] = False
+    return out, stats
+
+
+def build_lost_curves(frames: List[Dict], T: int, sr: int, fps: float,
+                      *, conf_threshold: float = LOST_CONF_THRESHOLD,
+                      duck_db: float = LOST_DUCK_DB,
+                      diffuse_boost: float = LOST_DIFFUSE_BOOST,
+                      fade_ms: float = LOST_FADE_MS):
+    """Per-sample (duck_gain, diffuse_boost) curves for lost episodes (A16).
+
+    duck_gain falls to 10**(duck_db/20) while lost and returns to 1.0 when the
+    track is recovered; diffuse rises to `diffuse_boost` over the same window so
+    the source is pushed toward the reverberant field rather than being panned
+    confidently to a wrong direction.  Both are box-smoothed over `fade_ms` to
+    keep the transitions click-free.
+    """
+    conf = np.array([float(f.get("confidence", 1.0)) for f in frames], dtype=np.float32)
+    lost = (conf < float(conf_threshold)).astype(np.float32)
+    if not lost.any() or T <= 0:
+        return np.ones(max(T, 0), dtype=np.float32), np.zeros(max(T, 0), dtype=np.float32)
+
+    # A frame dict without "frame" falls back to its position in the list, which
+    # is what an unsampled (stride 1) trajectory means anyway. Raising here would
+    # take down a render over a cosmetic key.
+    idx = np.array([float(f.get("frame", i)) for i, f in enumerate(frames)],
+                   dtype=np.float32)
+    idx_samples = idx * (float(sr) / float(fps))
+    s = np.arange(T, dtype=np.float32)
+    lost_s = np.interp(s, idx_samples, lost).astype(np.float32)
+
+    fade_samples = max(1, int(sr * float(fade_ms) / 1000.0))
+    if fade_samples > 1:
+        from scipy.ndimage import uniform_filter1d
+        lost_s = uniform_filter1d(lost_s, size=fade_samples, mode="nearest").astype(np.float32)
+    lost_s = np.clip(lost_s, 0.0, 1.0)
+
+    duck_floor = float(10.0 ** (float(duck_db) / 20.0))
+    duck = (1.0 - lost_s) + duck_floor * lost_s
+    diffuse = float(diffuse_boost) * lost_s
+    return duck.astype(np.float32), diffuse.astype(np.float32)
+
+
 def _load_and_prepare(audio_path: str, trajectory: Dict, smooth_ms: float = 50.0,
                       dist_gain_k: float = 1.0, lpf_min: float = 800.0, lpf_max: float = 8000.0,
                       gain_min: float = 0.3,
                       use_learned_mapping: bool = False, learned_model_path: str = None,
                       gain_mode: str = "depth_rel", metric_alpha: float = 0.5,
                       use_confidence_fade: bool = False, conf_fade_strength: float = 0.6,
-                      d_rel_attack_s: float = 0.0, d_rel_release_s: float = 0.0):
+                      d_rel_attack_s: float = 0.0, d_rel_release_s: float = 0.0,
+                      confidence_gate: bool = False,
+                      conf_threshold: float = LOST_CONF_THRESHOLD,
+                      lost_duck_db: float = LOST_DUCK_DB,
+                      lost_diffuse_boost: float = LOST_DIFFUSE_BOOST,
+                      d_ref_m: float = 1.0, air_absorption: bool = True,
+                      doppler: bool = False, doppler_max_ratio: float = 0.25):
     """Shared prep for FOA and binaural renderers: load audio, interpolate trajectory, apply distance FX.
 
-    gain_mode: "depth_rel" (baseline), "bbox_area" (A), "bbox_area_log" (A-log), "hybrid" (B)
+    gain_mode: "depth_rel" (baseline), "bbox_area" (A), "bbox_area_log" (A-log),
+               "hybrid" (B), "physical" (A7 -- 1/d direct gain, constant absolute
+               reverb send, ISO 9613-1 air absorption).
     metric_alpha: blend weight for depth component in "hybrid" mode.
     use_confidence_fade: fade out when tracker confidence is low (off-screen handling).
     conf_fade_strength: max d_rel increase at conf=0 (0.6 recommended).
+    confidence_gate: freeze azimuth and duck toward diffuse during lost episodes (A16).
+                     A trajectory with no "confidence" field is unaffected.
+    doppler: resample by the radial velocity in the trajectory (A14, opt-in).
+
+    Returns (audio_proc, sr, az_s, el_s, dist_s, d_rel_s, frames). Callers that
+    need the lost-episode diffuse curve rebuild it with build_lost_curves().
     """
     audio, sr = sf.read(audio_path, dtype='float32')
     if audio.ndim == 2:
@@ -547,6 +846,19 @@ def _load_and_prepare(audio_path: str, trajectory: Dict, smooth_ms: float = 50.0
     intr = trajectory.get("intrinsics", {})
     img_w = int(intr.get("width",  frames[0].get("width",  1280)))
     img_h = int(intr.get("height", frames[0].get("height",  720)))
+
+    # ── A16: freeze azimuth across lost episodes before interpolating ────────
+    duck_s = None
+    if confidence_gate:
+        frames, lost_stats = freeze_lost_frames(frames, conf_threshold=conf_threshold)
+        if lost_stats["n_lost"]:
+            print(f"[info] confidence gate: {lost_stats['n_lost']}/{lost_stats['n_frames']} "
+                  f"frames lost in {lost_stats['n_episodes']} episodes — azimuth frozen, "
+                  f"ducking {lost_duck_db:+.1f} dB toward diffuse")
+            duck_s, _ = build_lost_curves(
+                frames, T, sr, fps, conf_threshold=conf_threshold,
+                duck_db=lost_duck_db, diffuse_boost=lost_diffuse_boost)
+
     az_s, el_s, dist_s, d_rel_s = interpolate_angles_distance(
         frames, T, sr, fps=fps,
         gain_mode=gain_mode, img_w=img_w, img_h=img_h, metric_alpha=metric_alpha,
@@ -554,12 +866,54 @@ def _load_and_prepare(audio_path: str, trajectory: Dict, smooth_ms: float = 50.0
         d_rel_attack_s=d_rel_attack_s, d_rel_release_s=d_rel_release_s,
     )
     az_s, el_s = smooth_limit_angles(az_s, el_s, sr, smooth_ms=smooth_ms)
-    audio_proc = apply_distance_gain_lpf(audio, sr, dist_s, d_rel_s,
-                                         gain_k=dist_gain_k, lpf_min_hz=lpf_min, lpf_max_hz=lpf_max,
-                                         gain_min=gain_min,
-                                         use_learned_mapping=use_learned_mapping,
-                                         learned_model_path=learned_model_path)
+
+    # ── A14: Doppler from the radial velocity the smoother already computes ──
+    if doppler:
+        audio = apply_doppler(audio, sr, dist_s, max_ratio=doppler_max_ratio)
+
+    if gain_mode == "physical":
+        # A7: 1/d direct gain + ISO 9613-1 air absorption. The reverb side is
+        # handled by the caller through build_physical_wet_curve().
+        audio_proc = apply_physical_distance(
+            audio, sr, dist_s, d_ref_m=d_ref_m, gain_floor=gain_min,
+            air_absorption=air_absorption)
+    else:
+        audio_proc = apply_distance_gain_lpf(audio, sr, dist_s, d_rel_s,
+                                             gain_k=dist_gain_k, lpf_min_hz=lpf_min, lpf_max_hz=lpf_max,
+                                             gain_min=gain_min,
+                                             use_learned_mapping=use_learned_mapping,
+                                             learned_model_path=learned_model_path)
+
+    if duck_s is not None:
+        n = min(len(audio_proc), len(duck_s))
+        audio_proc = audio_proc.copy()
+        audio_proc[:n] = (audio_proc[:n] * duck_s[:n]).astype(np.float32)
+
     return audio_proc, sr, az_s, el_s, dist_s, d_rel_s, frames
+
+
+def _build_render_wet_curve(frames, T, sr, trajectory, d_rel_s, dist_s, *,
+                            gain_mode, d_ref_m, gain_min, reverb_send,
+                            confidence_gate, conf_threshold, lost_diffuse_boost,
+                            use_learned_mapping, learned_model_path):
+    """Reverb wet curve for a render: physical law (A7) + lost-episode duck (A16)."""
+    if gain_mode == "physical":
+        wet = build_physical_wet_curve(dist_s[:T], d_ref_m=d_ref_m,
+                                       gain_floor=gain_min, reverb_send=reverb_send)
+    else:
+        wet = build_wet_curve_from_dist_occ(
+            d_rel_s, use_learned_mapping=use_learned_mapping,
+            learned_model_path=learned_model_path)
+    if confidence_gate:
+        fps = float(trajectory.get("fps",
+                                   trajectory.get("intrinsics", {}).get("fps", 30.0)))
+        _, diffuse = build_lost_curves(frames, T, sr, fps,
+                                       conf_threshold=conf_threshold,
+                                       diffuse_boost=lost_diffuse_boost)
+        n = min(len(wet), len(diffuse))
+        wet = wet.copy()
+        wet[:n] = np.clip(wet[:n] + diffuse[:n], 0.0, 1.0)
+    return wet.astype(np.float32)
 
 
 def render_foa_from_trajectory(
@@ -582,6 +936,15 @@ def render_foa_from_trajectory(
     conf_fade_strength: float = 0.6,
     d_rel_attack_s: float = 0.0,
     d_rel_release_s: float = 0.0,
+    confidence_gate: bool = False,
+    conf_threshold: float = LOST_CONF_THRESHOLD,
+    lost_duck_db: float = LOST_DUCK_DB,
+    lost_diffuse_boost: float = LOST_DIFFUSE_BOOST,
+    d_ref_m: float = 1.0,
+    air_absorption: bool = True,
+    reverb_send: float = 0.02,
+    doppler: bool = False,
+    doppler_max_ratio: float = 0.25,
 ) -> Dict:
     """Render mono audio to FOA (4-channel AmbiX) using trajectory.
 
@@ -596,7 +959,11 @@ def render_foa_from_trajectory(
         use_learned_mapping=use_learned_mapping, learned_model_path=learned_model_path,
         gain_mode=gain_mode, metric_alpha=metric_alpha,
         use_confidence_fade=use_confidence_fade, conf_fade_strength=conf_fade_strength,
-        d_rel_attack_s=d_rel_attack_s, d_rel_release_s=d_rel_release_s)
+        d_rel_attack_s=d_rel_attack_s, d_rel_release_s=d_rel_release_s,
+        confidence_gate=confidence_gate, conf_threshold=conf_threshold,
+        lost_duck_db=lost_duck_db, lost_diffuse_boost=lost_diffuse_boost,
+        d_ref_m=d_ref_m, air_absorption=air_absorption,
+        doppler=doppler, doppler_max_ratio=doppler_max_ratio)
     T = audio_proc.shape[0]
 
     # Convert pipeline azimuth to AmbiX convention (negate)
@@ -607,8 +974,13 @@ def render_foa_from_trajectory(
 
     # Apply reverb if requested
     if apply_reverb:
-        wet_curve = build_wet_curve_from_dist_occ(
-            d_rel_s, use_learned_mapping=use_learned_mapping,
+        wet_curve = _build_render_wet_curve(
+            frames, T, sr, trajectory, d_rel_s, dist_s,
+            gain_mode=gain_mode, d_ref_m=d_ref_m, gain_min=gain_min,
+            reverb_send=reverb_send,
+            confidence_gate=confidence_gate, conf_threshold=conf_threshold,
+            lost_diffuse_boost=lost_diffuse_boost,
+            use_learned_mapping=use_learned_mapping,
             learned_model_path=learned_model_path)
         foa = apply_timevarying_reverb_foa(foa, sr, wet_curve, rt60=rt60)
 
@@ -636,6 +1008,7 @@ def render_binaural_from_trajectory(
     apply_reverb: bool = False,
     rt60: float = 0.5,
     block_ms: float = 10.0,
+    hrir_interp: str = "nearest",
     use_learned_mapping: bool = False,
     learned_model_path: str = None,
     gain_mode: str = "depth_rel",
@@ -644,6 +1017,15 @@ def render_binaural_from_trajectory(
     conf_fade_strength: float = 0.6,
     d_rel_attack_s: float = 0.0,
     d_rel_release_s: float = 0.0,
+    confidence_gate: bool = False,
+    conf_threshold: float = LOST_CONF_THRESHOLD,
+    lost_duck_db: float = LOST_DUCK_DB,
+    lost_diffuse_boost: float = LOST_DIFFUSE_BOOST,
+    d_ref_m: float = 1.0,
+    air_absorption: bool = True,
+    reverb_send: float = 0.02,
+    doppler: bool = False,
+    doppler_max_ratio: float = 0.25,
 ) -> Dict:
     """Render mono audio to HRTF binaural stereo using trajectory.
 
@@ -661,19 +1043,29 @@ def render_binaural_from_trajectory(
         use_learned_mapping=use_learned_mapping, learned_model_path=learned_model_path,
         gain_mode=gain_mode, metric_alpha=metric_alpha,
         use_confidence_fade=use_confidence_fade, conf_fade_strength=conf_fade_strength,
-        d_rel_attack_s=d_rel_attack_s, d_rel_release_s=d_rel_release_s)
+        d_rel_attack_s=d_rel_attack_s, d_rel_release_s=d_rel_release_s,
+        confidence_gate=confidence_gate, conf_threshold=conf_threshold,
+        lost_duck_db=lost_duck_db, lost_diffuse_boost=lost_diffuse_boost,
+        d_ref_m=d_ref_m, air_absorption=air_absorption,
+        doppler=doppler, doppler_max_ratio=doppler_max_ratio)
     T = audio_proc.shape[0]
 
     # Convert pipeline azimuth to AmbiX/SOFA convention (negate)
     az_sofa = -az_s
 
     # Direct HRTF binaural render (before reverb, so spatial cues are crisp)
-    stereo = direct_binaural_sofa(audio_proc, sr, az_sofa, el_s, sofa_path, block_ms=block_ms)
+    stereo = direct_binaural_sofa(audio_proc, sr, az_sofa, el_s, sofa_path,
+                                  block_ms=block_ms, hrir_interp=hrir_interp)
 
     # Apply reverb to stereo AFTER HRTF (reverb is diffuse, shouldn't mask spatial cues)
     if apply_reverb:
-        wet_curve = build_wet_curve_from_dist_occ(
-            d_rel_s, use_learned_mapping=use_learned_mapping,
+        wet_curve = _build_render_wet_curve(
+            frames, T, sr, trajectory, d_rel_s, dist_s,
+            gain_mode=gain_mode, d_ref_m=d_ref_m, gain_min=gain_min,
+            reverb_send=reverb_send,
+            confidence_gate=confidence_gate, conf_threshold=conf_threshold,
+            lost_diffuse_boost=lost_diffuse_boost,
+            use_learned_mapping=use_learned_mapping,
             learned_model_path=learned_model_path)
         from .irgen import schroeder_ir, fft_convolve
         ir = schroeder_ir(sr, rt60=rt60).astype(np.float32)
@@ -752,9 +1144,97 @@ def foa_to_binaural(foa_sn3d: np.ndarray, sr: int) -> np.ndarray:
     return np.stack([Lo.astype(np.float32), Ro.astype(np.float32)], 0)
 
 
+HRIR_INTERP_MODES = ("nearest", "barycentric")
+
+
+def hrir_barycentric_weights(src_cart: np.ndarray, q: np.ndarray):
+    """Barycentric weights over the 3 nearest SOFA directions (gap item A8).
+
+    A KEMAR SOFA grid is typically 5 deg in azimuth, so nearest-neighbour lookup
+    snaps a smoothly moving source between HRIRs: audible zipper artefacts, and
+    an effective angular resolution floor of ~5 deg -- far coarser than the
+    trajectory being fed to it.
+
+    Solve `A w = q` where the columns of A are the three nearest unit
+    measurement directions, then normalise so the weights sum to 1. That is the
+    exact barycentric coordinate of the query direction inside the spherical
+    triangle. If the query falls outside the triangle (a negative weight) or the
+    triangle is degenerate, fall back to inverse-angular-distance weighting over
+    the same three points, which is always non-negative and still continuous.
+
+    Args:
+        src_cart: (M, 3) unit vectors of the measurement grid.
+        q:        (3,) unit vector of the query direction.
+
+    Returns:
+        (idx, w) with idx an int array of 3 indices into src_cart and w a
+        float64 array of 3 non-negative weights summing to 1.
+    """
+    dots = src_cart @ q
+    # the 3 closest directions, ordered closest first
+    idx = np.argpartition(-dots, 3)[:3]
+    idx = idx[np.argsort(-dots[idx])]
+    P = src_cart[idx]                      # (3, 3), rows are directions
+
+    w = None
+    try:
+        w = np.linalg.solve(P.T, q)        # columns of P.T are the directions
+    except np.linalg.LinAlgError:
+        w = None
+    if w is None or not np.all(np.isfinite(w)) or np.any(w < -1e-9):
+        # Outside the triangle, or degenerate -- which is the normal case on a
+        # planar grid, e.g. a horizontal-only measurement ring, where the three
+        # nearest directions are coplanar with the query and the solve is
+        # singular. Fall back to a linear blend of the two bracketing
+        # directions, weighted by angular distance. On a ring that reproduces
+        # exact angular interpolation; elsewhere it is still continuous.
+        ang = np.arccos(np.clip(dots[idx], -1.0, 1.0))
+        if float(ang[0]) < 1e-9:
+            w = np.array([1.0, 0.0, 0.0])
+        else:
+            a0, a1 = float(ang[0]), float(ang[1])
+            denom = a0 + a1
+            w = (np.array([a1 / denom, a0 / denom, 0.0]) if denom > 1e-12
+                 else np.array([1.0, 0.0, 0.0]))
+    w = np.maximum(w, 0.0)
+    total = float(w.sum())
+    if total <= 0.0:
+        w = np.array([1.0, 0.0, 0.0])
+        total = 1.0
+    return idx, (w / total)
+
+
+def make_hrir_lookup(src_cart: np.ndarray, ir_data: np.ndarray,
+                     mode: str = "barycentric"):
+    """Build an (az, el) -> HRIR (2, L) lookup in the requested mode.
+
+    mode="nearest":     argmax of the dot product (pre-2026-09-04 behaviour,
+                        kept for stimulus reproducibility).
+    mode="barycentric": weighted sum over the 3 nearest measurement directions.
+    """
+    if mode not in HRIR_INTERP_MODES:
+        raise ValueError(f"unknown hrir_interp {mode!r}; expected one of {HRIR_INTERP_MODES}")
+
+    def _q(az: float, el: float) -> np.ndarray:
+        return np.array([math.cos(el) * math.cos(az),
+                         math.cos(el) * math.sin(az),
+                         math.sin(el)], dtype=np.float64)
+
+    if mode == "nearest":
+        def lookup(az: float, el: float) -> np.ndarray:
+            return ir_data[int(np.argmax(src_cart @ _q(az, el)))]
+    else:
+        def lookup(az: float, el: float) -> np.ndarray:
+            idx, w = hrir_barycentric_weights(src_cart, _q(az, el))
+            return np.tensordot(w, ir_data[idx], axes=(0, 0)).astype(ir_data.dtype)
+
+    return lookup
+
+
 def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
                          el_s: np.ndarray, sofa_path: str,
-                         block_ms: float = 50.0) -> np.ndarray:
+                         block_ms: float = 50.0,
+                         hrir_interp: str = "nearest") -> np.ndarray:
     """Render mono to binaural using direct HRTF lookup per time block.
 
     Instead of FOA virtual-speaker decode (which washes out high-frequency
@@ -812,12 +1292,7 @@ def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
     win_len = hop * 2  # 50% overlap
     window = np.hanning(win_len).astype(np.float64)
 
-    def find_nearest_hrir(az, el):
-        qx = np.cos(el) * np.cos(az)
-        qy = np.cos(el) * np.sin(az)
-        qz = np.sin(el)
-        dots = src_cart[:, 0]*qx + src_cart[:, 1]*qy + src_cart[:, 2]*qz
-        return ir_data[int(np.argmax(dots))]  # (2, hrir_len)
+    hrir_lookup = make_hrir_lookup(src_cart, ir_data, mode=hrir_interp)
 
     out = np.zeros((2, T), dtype=np.float64)
 
@@ -836,7 +1311,7 @@ def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
         # HRIR lookup at frame center
         az_med = float(np.median(az_s[start:min(start + hop, T)]))
         el_med = float(np.median(el_s[start:min(start + hop, T)]))
-        hrir = find_nearest_hrir(az_med, el_med)
+        hrir = hrir_lookup(az_med, el_med)
 
         # Extended input for correct convolution at [start, end)
         ext_start = max(0, start - hrir_len + 1)
@@ -861,7 +1336,8 @@ def direct_binaural_sofa(mono: np.ndarray, sr: int, az_s: np.ndarray,
     return out.astype(np.float32)
 
 
-def foa_to_binaural_sofa(foa_sn3d: np.ndarray, sr: int, sofa_path: str) -> np.ndarray:
+def foa_to_binaural_sofa(foa_sn3d: np.ndarray, sr: int, sofa_path: str,
+                         hrir_interp: str = "nearest") -> np.ndarray:
     """Decode FOA (AmbiX ACN/SN3D [W,Y,Z,X]) to binaural using SOFA HRTF.
 
     Uses direct HRIR convolution via h5py (no spaudiopy dependency).
@@ -903,14 +1379,7 @@ def foa_to_binaural_sofa(foa_sn3d: np.ndarray, sr: int, sofa_path: str) -> np.nd
                     )[:L_out]
             ir_data = ir_resampled
 
-        def find_nearest_hrir(az_rad: float, el_rad: float) -> np.ndarray:
-            """Find closest HRIR by angular distance. Returns (2, L)."""
-            qx = np.cos(el_rad) * np.cos(az_rad)
-            qy = np.cos(el_rad) * np.sin(az_rad)
-            qz = np.sin(el_rad)
-            dots = src_cart[:, 0] * qx + src_cart[:, 1] * qy + src_cart[:, 2] * qz
-            idx = int(np.argmax(dots))
-            return ir_data[idx]  # (2, L)
+        hrir_lookup = make_hrir_lookup(src_cart, ir_data, mode=hrir_interp)
 
         # --- Virtual speaker decode (8 speakers on cube for order-1) ---
         # Speaker directions: front, back, left, right, up-front, up-back, down-front, down-back
@@ -942,7 +1411,7 @@ def foa_to_binaural_sofa(foa_sn3d: np.ndarray, sr: int, sofa_path: str) -> np.nd
 
             # Get HRIR for this speaker direction
             # SOFA convention: az=0 is front, positive=counterclockwise
-            hrir = find_nearest_hrir(az_spk, el_spk)  # (2, L)
+            hrir = hrir_lookup(az_spk, el_spk)  # (2, L)
 
             # Convolve
             for ch in range(2):
@@ -1223,6 +1692,16 @@ __all__ = [
     "render_stereo_pan_reverb_baseline",
     "render_baselines_from_trajectory",
     # Distance processing
+    "freeze_lost_frames",
+    "build_lost_curves",
+    "apply_physical_distance",
+    "physical_direct_gain",
+    "build_physical_wet_curve",
+    "apply_doppler",
+    "air_absorption_cutoff_hz",
     "apply_distance_gain_lpf",
+    "make_hrir_lookup",
+    "hrir_barycentric_weights",
+    "HRIR_INTERP_MODES",
     "build_wet_curve_from_dist_occ",
 ]

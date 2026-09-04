@@ -997,8 +997,16 @@ def estimate_depth_at_bbox(
         dmap = estimate_depth(frame, midas_bundle)
         return _extract_depth_from_bbox_raw(dmap, cx, cy, w, h, W, H), False
 
-    # Default fallback
-    return 2.0, True  # Default 2 meters
+    # Default fallback: no backend at all. It MUST answer in the units the
+    # caller is working in. Returning (2.0, True) unconditionally handed a
+    # metre value to a caller running in relative mode (initialize_depth_backend
+    # reports is_metric=False when it finds no backend), and
+    # compute_3d_position then read 2.0 as a relative depth:
+    #     dist_m = near + (1 - 2.0) * (far - near)
+    # i.e. a NEGATIVE distance (measured -9.0 m with the default 1..10 m
+    # scale). dist_norm then clamped to 1.0 and every source collapsed onto
+    # the listener with no warning. Mirror the exception branch above instead.
+    return (2.0, True) if is_metric else (0.5, False)
 
 
 def _extract_depth_from_bbox_raw(

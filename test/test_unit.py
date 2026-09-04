@@ -1884,3 +1884,81 @@ class TestAudioIOCallTimeFallback(unittest.TestCase):
                 audio_io.load_audio("nope.wav", sr=None)
         finally:
             audio_io._librosa = orig
+
+
+class TestDepthFallbackUnits:
+    """No depth backend must not mean a negative distance. docs/ISSUES.md I14."""
+
+    def test_estimate_depth_fallback_answers_in_caller_units(self):
+        import numpy as np
+        from vid2spatial_pkg.vision import estimate_depth_at_bbox
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+        rel, is_m = estimate_depth_at_bbox(frame, 32, 32, 8, 8, None, None,
+                                           is_metric=False)
+        assert is_m is False and 0.0 <= rel <= 1.0
+        met, is_m = estimate_depth_at_bbox(frame, 32, 32, 8, 8, None, None,
+                                           is_metric=True)
+        assert is_m is True and met > 0.0
+
+    def test_relative_fallback_never_yields_a_negative_distance(self):
+        from vid2spatial_pkg.vision import compute_3d_position, CameraIntrinsics
+        import numpy as np
+        from vid2spatial_pkg.vision import estimate_depth_at_bbox
+        frame = np.zeros((64, 64, 3), dtype=np.uint8)
+        rel, _ = estimate_depth_at_bbox(frame, 32, 32, 8, 8, None, None,
+                                        is_metric=False)
+        K = CameraIntrinsics(width=640, height=360, fov_deg=60.0)
+        _, _, dist_m, _, _, _ = compute_3d_position(
+            320, 180, rel, K, (0.5, 10.0), is_metric=False)
+        assert dist_m > 0.0, f"negative/zero distance from the fallback: {dist_m}"
+
+    def test_tracker_depth_fallback_matches_is_metric(self):
+        """The tracker's own short-circuit had the same units bug."""
+        import inspect
+        from vid2spatial_pkg import v2_spatial_tracker as t
+        src = inspect.getsource(t.V2SpatialTracker._estimate_depth)
+        assert "2.0 if self.is_metric else 0.5" in src
+
+
+class TestMultiSourceCollapseGuard:
+    """N sources that came out identical are one object, not N. I15."""
+
+    def test_identical_trajectories_are_refused(self):
+        import pytest
+        from vid2spatial_pkg.pipeline import _assert_sources_are_distinct
+        traj = {"frames": [{"az": 0.1, "el": 0.0}, {"az": 0.2, "el": 0.0}]}
+        with pytest.raises(ValueError, match="multi-source collapse"):
+            _assert_sources_are_distinct([traj, dict(traj)])
+
+    def test_distinct_trajectories_pass(self):
+        from vid2spatial_pkg.pipeline import _assert_sources_are_distinct
+        a = {"frames": [{"az": 0.1, "el": 0.0}]}
+        b = {"frames": [{"az": -0.4, "el": 0.0}]}
+        _assert_sources_are_distinct([a, b])
+
+
+class TestTrackingMethodMapping:
+    """An unknown method must not become a different tracker in silence. I15."""
+
+    def test_known_methods_include_the_box_driven_one(self):
+        import inspect
+        from vid2spatial_pkg import pipeline
+        src = inspect.getsource(pipeline.SpatialAudioPipeline._compute_trajectory)
+        assert '"yw_sam2": "yw_sam2"' in src
+        assert "unknown tracking method" in src
+
+
+class TestCenterLockGate:
+    """The init_bbox lock must be bounded. I15."""
+
+    def test_gate_is_at_least_the_box_diagonal(self):
+        from vid2spatial_pkg.v2_spatial_tracker import _center_lock_gate_px
+        assert _center_lock_gate_px((0, 0, 30, 40), {}) == 50.0
+
+    def test_gate_scales_with_the_frame(self):
+        import numpy as np
+        from vid2spatial_pkg.v2_spatial_tracker import _center_lock_gate_px
+        cache = {0: np.zeros((360, 640, 3), dtype=np.uint8)}
+        gate = _center_lock_gate_px((0, 0, 41, 16), cache)
+        assert 70.0 < gate < 80.0          # 10% of the 734 px diagonal
+        assert gate < 230.6, "the observed wrong lock would still pass"

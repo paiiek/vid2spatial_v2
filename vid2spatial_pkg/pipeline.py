@@ -25,6 +25,30 @@ from .foa_render import (
 )
 
 
+
+def _assert_sources_are_distinct(trajectories) -> None:
+    """Refuse to ship N copies of one object as N sources.
+
+    A tracker that ignores init_bbox (adaptive_k did, silently) gives every
+    source the same angles. The render then sums N identical signals into one
+    direction and exports N automation files that differ only in object_id --
+    indistinguishable from a working multi-source run until someone listens.
+    """
+    seen = {}
+    for i, traj in enumerate(trajectories):
+        sig = SpatialAudioPipeline._traj_signature(traj)
+        if not sig:
+            continue
+        if sig in seen:
+            raise ValueError(
+                f"multi-source collapse: source {seen[sig] + 1} and source "
+                f"{i + 1} produced identical trajectories, so they are the "
+                f"same object tracked twice, not two sources. The tracker "
+                f"ignored at least one init_bbox. Use a tracking method that "
+                f"honours the box (method='yw_sam2'), or check that each box "
+                f"sits on a distinct object.")
+        seen[sig] = i
+
 class SpatialAudioPipeline:
     """
     End-to-end pipeline for creating spatial audio from video and mono audio.
@@ -276,6 +300,8 @@ class SpatialAudioPipeline:
         # Applies adaptive-K, confidence gating, jump reject, variance-gated
         # depth blending, and adaptive Kalman — all in one place.
         if self.use_v2_tracker:
+            # Imported before the try so the except clause below can name it.
+            from .v2_spatial_tracker import NoTrackForInitBBoxError
             try:
                 from .v2_spatial_tracker import V2SpatialTracker
 
@@ -295,16 +321,28 @@ class SpatialAudioPipeline:
                 # "hybrid_dino"  → Grounding-DINO + AdaptiveK
                 # "auto"         → speed-based selection (fast→bytetrack, slow→adaptive_k)
                 # anything else  → adaptive-K YOLO
-                if tracking_method == "kcf":
-                    v2_method = "kcf"
-                elif tracking_method in ("yolo", "v1_bytetrack"):
-                    v2_method = "v1_bytetrack"
-                elif tracking_method == "hybrid_dino":
-                    v2_method = "hybrid_dino"
-                elif tracking_method == "auto":
-                    v2_method = "auto"
-                else:
-                    v2_method = "adaptive_k"
+                # An unrecognised name used to fall through to adaptive_k.
+                # adaptive_k is detection-driven and ignores init_bbox, so
+                # config.vision.tracking.method="yw_sam2" quietly became a
+                # different tracker that threw the user's box away. In
+                # multi-source that made every source track the same detected
+                # object and emit byte-identical automation files.
+                _V2_METHODS = {
+                    "kcf": "kcf",
+                    "yolo": "v1_bytetrack",
+                    "v1_bytetrack": "v1_bytetrack",
+                    "hybrid_dino": "hybrid_dino",
+                    "auto": "auto",
+                    "yw_sam2": "yw_sam2",
+                    "sam2": "yw_sam2",
+                    "adaptive_k": "adaptive_k",
+                }
+                if tracking_method not in _V2_METHODS:
+                    raise ValueError(
+                        f"unknown tracking method {tracking_method!r}. "
+                        f"Known: {sorted(_V2_METHODS)}. It used to be silently "
+                        f"replaced by 'adaptive_k', which ignores init_bbox.")
+                v2_method = _V2_METHODS[tracking_method]
 
                 print(f'[info] Using V2SpatialTracker (method={v2_method}, '
                       f'depth={self.config.vision.depth.backend})')
@@ -346,8 +384,17 @@ class SpatialAudioPipeline:
 
                 return traj
 
+            except NoTrackForInitBBoxError:
+                # The user's box matched nothing. That is an input problem, not
+                # a tracker malfunction, and the legacy path cannot do better --
+                # it would only replace this actionable message with
+                # "Unknown tracking method: v1_bytetrack", naming a method the
+                # real tracker does support. Let it reach the caller.
+                raise
             except Exception as e:
-                print(f'[warn] V2SpatialTracker failed ({e}), falling back to legacy vision module')
+                print(f'[warn] V2SpatialTracker failed ({type(e).__name__}: {e}), '
+                      f'falling back to legacy vision module. If the legacy path '
+                      f'then rejects the tracking method, THIS is the real error.')
 
         # ── Legacy vision path (fallback) ─────────────────────────────────
         compute_fn = compute_trajectory_3d
@@ -792,6 +839,13 @@ class SpatialAudioPipeline:
 
     # ── multi-source (offline) ───────────────────────────────────────────
 
+    @staticmethod
+    def _traj_signature(traj: Dict[str, Any]) -> tuple:
+        """Angles only -- what makes a source a distinct object in the mix."""
+        return tuple((round(float(f.get("az", 0.0)), 6),
+                      round(float(f.get("el", 0.0)), 6))
+                     for f in traj.get("frames", []))
+
     def _compute_trajectory_for_bbox(self, bbox) -> Dict[str, Any]:
         """One source's trajectory, tracked from its own init bbox.
 
@@ -863,6 +917,7 @@ class SpatialAudioPipeline:
         for i, bbox in enumerate(ms.init_bboxes):
             print(f'      source {i + 1}/{n}: init bbox {tuple(bbox)}')
             trajectories.append(self._compute_trajectory_for_bbox(bbox))
+        _assert_sources_are_distinct(trajectories)
         self._trajectory = trajectories[0]
 
         exports = []

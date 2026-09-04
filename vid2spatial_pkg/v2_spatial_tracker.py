@@ -48,6 +48,33 @@ from .depth_utils import process_trajectory_depth, DepthConfig
 from .temporal_smoother import smooth_trajectory_batch
 
 
+class NoTrackForInitBBoxError(RuntimeError):
+    """The user's init_bbox matched no detection close enough to trust.
+
+    Raised instead of locking onto whatever detection happened to be nearest,
+    which silently substitutes an unrelated object for the one the user asked
+    for and is indistinguishable from success in the output.
+    """
+
+
+# Centre-distance lock gate. A detection counts as "the box the user drew"
+# only if its centre is within the box's own diagonal, or within this fraction
+# of the frame diagonal -- whichever is larger, so a small box on a big frame
+# still tolerates a reasonable near-miss.
+CENTER_LOCK_FRAME_DIAG_FRAC = 0.10
+
+
+def _center_lock_gate_px(init_bbox, frame_cache) -> float:
+    """Pixel radius within which a detection may be adopted for ``init_bbox``."""
+    _, _, bw, bh = init_bbox
+    gate = float((bw ** 2 + bh ** 2) ** 0.5)
+    for frame in frame_cache.values():
+        fh, fw = frame.shape[:2]
+        gate = max(gate, CENTER_LOCK_FRAME_DIAG_FRAC * (fw ** 2 + fh ** 2) ** 0.5)
+        break
+    return gate
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Internal dataclass
 # ─────────────────────────────────────────────────────────────────────────────
@@ -568,8 +595,15 @@ class V2SpatialTracker:
         """
         has_depth = (self.depth_fn is not None) or (self._midas_bundle is not None)
         if not has_depth:
+            # depth_m must be in the units _project_3d will read it in.
+            # A flat 2.0 was metres, but with no backend is_metric is False, so
+            # compute_3d_position read it as a RELATIVE depth and produced
+            #     0.5 + (1 - 2.0) * (10.0 - 0.5) = -9.0 m
+            # for every frame: a negative distance that clamped dist_norm to
+            # 1.0 and collapsed every source onto the listener, silently.
+            fallback = 2.0 if self.is_metric else 0.5
             for f in raw_frames:
-                f.depth_m = 2.0
+                f.depth_m = fallback
             return raw_frames
 
         # ── frame_cache가 첨부돼 있으면 1-pass 경로 사용 ──────────────────────
@@ -1367,8 +1401,28 @@ class V2SpatialTracker:
                             dist = ((e["cx"]-ibx)**2 + (e["cy"]-iby)**2)**0.5
                             if dist < best_dist:
                                 best_dist, best_id = dist, e.get("track_id")
+                        # Bound the fallback. Unbounded, "closest centre" is
+                        # "any detection anywhere": with one detection in the
+                        # frame EVERY init_bbox locks onto it, however far
+                        # away. Measured: two multi-source boxes 314.8 px
+                        # apart in a 640x360 frame both locked track_id=2 and
+                        # produced byte-identical automation files, with the
+                        # distance printed but never acted on.
+                        gate_px = _center_lock_gate_px(init_bbox, frame_cache)
+                        if best_id is None or best_dist > gate_px:
+                            raise NoTrackForInitBBoxError(
+                                f"init_bbox {tuple(init_bbox)} matches no "
+                                f"detection: best IOU {best_iou:.2f} and the "
+                                f"nearest detected centre is {best_dist:.1f} px "
+                                f"away (gate {gate_px:.1f} px). The tracker "
+                                f"would otherwise lock onto an unrelated "
+                                f"object and report nothing. Draw the box on a "
+                                f"detected object, or use method='yw_sam2' "
+                                f"which segments the box directly.")
                         locked_track_id = best_id
-                        print(f"[v1_bytetrack] locked track_id={locked_track_id} by center dist={best_dist:.1f}px")
+                        print(f"[v1_bytetrack] locked track_id={locked_track_id} "
+                              f"by center dist={best_dist:.1f}px "
+                              f"(gate {gate_px:.1f}px)")
 
             # Build frame→entry map
             # locked_track_id 있을 때: 해당 track만 수집.

@@ -43,12 +43,16 @@ from pathlib import Path
 import yaml
 
 _REPO = Path(__file__).resolve().parent.parent
+# The INSTALLED bridge, which is the one test/test_bridge_contract.py loads and
+# executes. Until 2026-09-04 this pointed at spatial_engine-proto's lane branch
+# instead, so the contract recorded that bridge's 10 m /spatial constant while
+# every test ran against the installed bridge's 20 m, and --check reported no
+# drift because it was comparing the lane bridge with itself.
 DEFAULT_BRIDGE = Path(os.environ.get(
-    "V2S_BRIDGE_PATH", "/home/seung/mmhoa/spatial_engine-proto/bridge/vid2spatial_osc.py"))
-# The attach target is the lane branch, not whatever the engine tree happens to
-# have checked out (another session works there and its HEAD moves).  --ref /
-# V2S_BRIDGE_REF reads the bridge out of that git ref instead of the worktree.
-DEFAULT_BRIDGE_REF = os.environ.get("V2S_BRIDGE_REF", "fix/lane-bridge-handoff")
+    "V2S_BRIDGE_PATH", "/home/seung/mmhoa/spatial_engine/bridge/vid2spatial_osc.py"))
+# --ref / V2S_BRIDGE_REF reads the bridge out of a git ref instead of the
+# worktree file; empty means the worktree, which is what the tests execute.
+DEFAULT_BRIDGE_REF = os.environ.get("V2S_BRIDGE_REF", "")
 DEFAULT_ADR = Path("/home/seung/mmhoa/spatial_engine-proto/docs/adr/vid2spatial_osc_contract.md")
 DEFAULT_OUT = _REPO / "vid2spatial_pkg" / "bridge_contract.yaml"
 

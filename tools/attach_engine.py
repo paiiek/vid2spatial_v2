@@ -67,22 +67,38 @@ def _check_contract() -> str:
     return out.splitlines()[-1] if out else "contract OK"
 
 
-def _check_constants() -> str:
-    """Sender and bridge distance laws must agree, or distance is silently rescaled."""
+def _check_constants(legacy_spatial: bool = False) -> str:
+    """Sender and bridge distance laws must agree, or distance is silently rescaled.
+
+    The bridge's ``/vid2spatial/spatial`` DISTANCE_MAX_M only matters when that
+    bundle is actually on the wire. Since A10 it is not: send_frame emits
+    ``/vid2spatial/distance``, already normalised by the sender, and the bridge
+    just inverts it. Comparing the two constants unconditionally would block
+    attaching to a CORRECTLY behaving 20 m engine, so the check now applies
+    only under ``--legacy-spatial``, which is the one mode that puts metres on
+    the wire for the bridge to renormalise.
+    """
     import yaml
     from vid2spatial_pkg.osc_sender import OSCConfig
     doc = yaml.safe_load(CONTRACT.read_text())
     bridge_max = doc["bridge"]["handlers"]["/vid2spatial/spatial"]["dist_max_m"]
     sender_max = OSCConfig().distance_max_m
-    if sender_max != bridge_max:
-        raise PreflightError(
-            f"distance normalisation disagrees: sender={sender_max} m vs "
-            f"bridge={bridge_max} m — the engine would receive distances scaled "
-            f"by {bridge_max / sender_max:.2f}x, with no error anywhere.")
+    if legacy_spatial:
+        if sender_max != bridge_max:
+            raise PreflightError(
+                f"--legacy-spatial puts metres on the wire, but distance "
+                f"normalisation disagrees: sender={sender_max} m vs "
+                f"bridge={bridge_max} m — the engine would receive distances "
+                f"scaled by {bridge_max / sender_max:.2f}x, with no error "
+                f"anywhere. Drop --legacy-spatial, or match the constants.")
+        note = f"legacy /spatial on: sender and bridge agree at {sender_max} m"
+    else:
+        note = (f"sender distance_max_m={sender_max} m; bridge /spatial "
+                f"{bridge_max} m NOT CONSULTED (bundle not emitted)")
     obj_base = doc["export"]["default_object_id"]
     if obj_base != 1:
         raise PreflightError(f"ADM object ids must be 1-based, contract says {obj_base}")
-    return f"distance_max_m={sender_max} m, object ids 1-based, az right-positive -> bridge negates"
+    return f"{note}, object ids 1-based, az right-positive -> bridge negates"
 
 
 BRIDGE_MODE_FILE = Path("/tmp/.spe_bridge_mode")
@@ -168,9 +184,10 @@ def _check_roundtrip(host: str, port: int, timeout: float = 2.0) -> str:
         rx.close()
 
 
-def preflight(host: str, port: int, *, roundtrip: bool = True) -> int:
+def preflight(host: str, port: int, *, roundtrip: bool = True,
+              legacy_spatial: bool = False) -> int:
     steps = [("wire contract", lambda: _check_contract()),
-             ("boundary constants", lambda: _check_constants()),
+             ("boundary constants", lambda: _check_constants(legacy_spatial)),
              ("bridge mode", lambda: _check_bridge_mode()),
              ("reachability", lambda: _check_reachable(host, port))]
     if roundtrip:
@@ -216,9 +233,10 @@ def load_trajectory(path: Path) -> tuple[list, float]:
 
 
 def stream(frames, fps, host, port, *, object_id, distance_max_m, az_sign,
-           realtime, dry_run, limit=None):
+           realtime, dry_run, limit=None, legacy_spatial=False):
     from vid2spatial_pkg.osc_sender import OSCSpatialSender, OSCConfig
-    cfg = OSCConfig(host=host, port=port, distance_max_m=distance_max_m)
+    cfg = OSCConfig(host=host, port=port, distance_max_m=distance_max_m,
+                    legacy_spatial=legacy_spatial)
     sender = OSCSpatialSender(config=cfg) if _accepts_config() else \
         OSCSpatialSender(host=host, port=port)
     sender.config.distance_max_m = distance_max_m
@@ -237,12 +255,16 @@ def stream(frames, fps, host, port, *, object_id, distance_max_m, az_sign,
         t_s = i / fps
         if dry_run or shown < 3:
             norm = max(0.0, min(1.0, 1.0 - min(dist_m / distance_max_m, 1.0)))
+            # Only show what send_frame actually puts on the wire: /spatial is
+            # off unless --legacy-spatial, and printing it regardless told the
+            # operator a datagram was being sent that was not.
+            legacy = (f"  /vid2spatial/spatial [{az_deg:.4f}, {el_deg:.4f}, "
+                      f"{dist_m:.4f}, 0.0, {t_s:.4f}]") if legacy_spatial else ""
             print(f"  frame {i:4d} t={t_s:6.3f}s -> "
                   f"/vid2spatial/azimuth [{az_deg:.4f}]  "
                   f"/vid2spatial/elevation [{el_deg:.4f}]  "
-                  f"/vid2spatial/distance [{norm:.4f}]  "
-                  f"/vid2spatial/spatial [{az_deg:.4f}, {el_deg:.4f}, {dist_m:.4f}, 0.0, {t_s:.4f}]"
-                  f"   => engine /adm/obj/{object_id}/aed "
+                  f"/vid2spatial/distance [{norm:.4f}]" + legacy
+                  + f"   => engine /adm/obj/{object_id}/aed "
                   f"[{-az_deg:.4f}, {el_deg:.4f}, {1.0 - norm:.4f}]")
             shown += 1
         if not dry_run:
@@ -289,6 +311,10 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--limit", type=int, help="only the first N frames")
     ap.add_argument("--no-realtime", action="store_true",
                     help="send as fast as possible instead of at fps")
+    ap.add_argument("--legacy-spatial", action="store_true",
+                    help="also emit the /vid2spatial/spatial bundle in METRES "
+                         "(legacy bridges only; the bridge then renormalises "
+                         "with its own DISTANCE_MAX_M and overrides /distance)")
     return ap
 
 
@@ -301,14 +327,16 @@ def main(argv=None) -> int:
 
     if args.check_engine:
         print(f"Preflight against {args.host}:{args.port}")
-        return preflight(args.host, args.port, roundtrip=not args.no_roundtrip)
+        return preflight(args.host, args.port, roundtrip=not args.no_roundtrip,
+                         legacy_spatial=args.legacy_spatial)
 
     if args.trajectory is None:
         ap.error("a trajectory file is required unless --check-engine is given")
 
     if not args.skip_preflight and not args.dry_run:
         print(f"Preflight against {args.host}:{args.port}")
-        if preflight(args.host, args.port, roundtrip=not args.no_roundtrip):
+        if preflight(args.host, args.port, roundtrip=not args.no_roundtrip,
+                     legacy_spatial=args.legacy_spatial):
             return 1
         print()
 
@@ -317,7 +345,8 @@ def main(argv=None) -> int:
     stream(frames, fps, args.host, args.port,
            object_id=args.object_id, distance_max_m=args.distance_max_m,
            az_sign=args.az_sign, realtime=not args.no_realtime,
-           dry_run=args.dry_run, limit=args.limit)
+           dry_run=args.dry_run, limit=args.limit,
+           legacy_spatial=args.legacy_spatial)
     return 0
 
 

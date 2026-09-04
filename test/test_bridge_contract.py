@@ -24,6 +24,7 @@ import importlib.util
 import json
 import math
 import os
+import re
 import socket
 import subprocess
 import sys
@@ -276,21 +277,31 @@ def test_spatial_bundle_carries_metres_not_normalised(contract, sender_legacy_ms
 def test_sender_and_bridge_distance_laws_agree(contract):
     """LOUD GUARD on the attach boundary.
 
-    send_frame emits /vid2spatial/distance normalised over the sender's
-    distance_max_m AND, last, /vid2spatial/spatial carrying raw metres that the
-    bridge normalises over its own DISTANCE_MAX_M.  The bundle arrives last and
-    wins, so if the two constants disagree the engine silently receives a
-    rescaled distance -- exactly the 10 m vs 20 m halving that shipped before
-    fix/lane-bridge-handoff.  Never let them drift apart again.
+    The sender normalises distance itself and emits /vid2spatial/distance; the
+    bridge only inverts that. Its own DISTANCE_MAX_M applies to the metric
+    /vid2spatial/spatial bundle, which since A10 is NOT emitted unless
+    --legacy-spatial is given -- the installed bridge normalises over 20 m and
+    the sender over 10 m, and that is fine precisely because the two paths
+    never both run. What must never drift is the sender against the contract's
+    own record of the sender, and the legacy bundle must still be shown to
+    disagree, since that is why it is opt-in. See docs/ISSUES.md I1.
     """
     from vid2spatial_pkg.osc_sender import OSCConfig
     bridge_max = contract["bridge"]["handlers"]["/vid2spatial/spatial"]["dist_max_m"]
     sender_max = OSCConfig().distance_max_m
     contract_max = contract["conventions"]["dist_norm"]["sender_distance_max_m"]
-    assert sender_max == bridge_max == contract_max, (
-        f"distance normalisation disagrees: sender={sender_max} m, "
-        f"bridge={bridge_max} m, contract={contract_max} m -- the engine would "
-        f"receive distances scaled by {bridge_max / sender_max:.2f}x")
+    assert sender_max == contract_max, (
+        f"sender distance_max_m={sender_max} m but the contract records "
+        f"{contract_max} m")
+    if bridge_max != sender_max:
+        # the legacy hazard, asserted rather than assumed away
+        dist_m = 10.0
+        via_distance = 1.0 - min(dist_m / sender_max, 1.0)
+        via_spatial = max(0.0, min(1.0, 1.0 - dist_m / bridge_max))
+        assert via_distance != pytest.approx(via_spatial), (
+            "constants differ but the two paths agree -- the legacy hazard "
+            "this test guards is not being exercised")
+        return
     # and the two paths must therefore produce the same normalised value
     for dist_m in (0.0, 2.5, 5.0, 9.9, 10.0, 25.0):
         via_distance = 1.0 - min(dist_m / sender_max, 1.0)
@@ -411,12 +422,35 @@ def _defaults(mod):
     return {a.dest: a.default for a in mod.build_parser()._actions}
 
 
+def _bridge_spatial_max() -> float:
+    """The bridge's own /spatial constant, read out of the source under test.
+
+    Pinning a literal here is what let the contract carry 10.0 while the bridge
+    the suite executes used 20.0, with nothing failing.
+    """
+    m = re.search(r"1\.0\s*-\s*dist_m\s*/\s*([0-9.]+)", BRIDGE_PATH.read_text())
+    assert m, "could not locate the bridge's /spatial normalisation constant"
+    return float(m.group(1))
+
+
+def test_contract_spatial_constant_matches_the_bridge(contract):
+    """The recorded /spatial constant must be the executed bridge's."""
+    if not BRIDGE_PATH.exists():
+        pytest.skip(f"bridge source not present: {BRIDGE_PATH}")
+    assert contract["bridge"]["handlers"]["/vid2spatial/spatial"]["dist_max_m"] \
+        == _bridge_spatial_max()
+
+
 def test_attach_defaults_match_the_contract(contract):
-    """The attach command's defaults are the engine's values, not guesses."""
+    """The attach command's defaults are the engine's values, not guesses.
+
+    The sender's distance_max_m is its OWN normalisation constant and is not
+    required to equal the bridge's /spatial constant: since A10 that bundle is
+    not emitted, so the two never meet. See docs/ISSUES.md I1.
+    """
     d = _defaults(_attach())
     assert d["object_id"] == contract["export"]["default_object_id"] == 1
-    assert d["distance_max_m"] == \
-        contract["bridge"]["handlers"]["/vid2spatial/spatial"]["dist_max_m"] == 10.0
+    assert d["distance_max_m"] == 10.0
     assert d["az_sign"] == "right-positive"
     assert d["port"] == contract["bridge"]["listen_port"] == 9000
     assert d["host"] == "127.0.0.1"
@@ -443,18 +477,37 @@ def test_attach_preflight_catches_low_latency_mode_file(tmp_path, monkeypatch):
     assert "no override" in mod._check_bridge_mode() or "no /" in mod._check_bridge_mode()
 
 
-def test_attach_preflight_catches_distance_law_mismatch(monkeypatch):
-    """The 10 m vs 20 m halving must fail the preflight, not ship silently."""
+def test_attach_preflight_checks_distance_law_only_for_legacy_spatial(monkeypatch):
+    """The halving is a --legacy-spatial hazard, and only there.
+
+    On the default path send_frame does not emit /vid2spatial/spatial, so the
+    bridge's metric constant is never applied and a 20 m engine is CORRECT.
+    Failing the preflight on it would block attaching to a healthy engine.
+    """
     mod = _attach()
-    assert "distance_max_m=10.0" in mod._check_constants()
+    default = mod._check_constants()
+    assert "NOT CONSULTED" in default
     from vid2spatial_pkg import osc_sender
 
-    class Bad:
-        distance_max_m = 20.0
+    class Bad:                       # sender constant != bridge constant
+        distance_max_m = 999.0
 
     monkeypatch.setattr(osc_sender, "OSCConfig", lambda: Bad())
+    assert "NOT CONSULTED" in mod._check_constants()          # still fine
     with pytest.raises(mod.PreflightError, match="disagrees"):
-        mod._check_constants()
+        mod._check_constants(legacy_spatial=True)              # now it matters
+
+
+def test_attach_dry_run_hides_spatial_unless_legacy(tmp_path, capsys):
+    """The preview must not advertise a datagram that is not sent."""
+    mod = _attach()
+    traj = tmp_path / "t.json"
+    traj.write_text(json.dumps({"fps": 30.0, "frames": [
+        {"frame": 0, "az": 0.0, "el": 0.0, "dist_m": 2.5}]}))
+    assert mod.main([str(traj), "--dry-run"]) == 0
+    assert "/vid2spatial/spatial" not in capsys.readouterr().out
+    assert mod.main([str(traj), "--dry-run", "--legacy-spatial"]) == 0
+    assert "/vid2spatial/spatial" in capsys.readouterr().out
 
 
 def test_attach_preflight_fails_when_nothing_is_listening():
@@ -526,11 +579,7 @@ def test_legacy_bundle_is_opt_in_and_overrides_distance(contract, sender_legacy_
         _check_msg(contract, addr, params)
 
     mod = _load_bridge()
-    # the bridge's own metric constant, read out of its source (it is inline)
-    import re
-    m = re.search(r"1\.0\s*-\s*dist_m\s*/\s*([0-9.]+)", BRIDGE_PATH.read_text())
-    assert m, "could not locate the bridge's /spatial normalisation constant"
-    bridge_max = float(m.group(1))
+    bridge_max = _bridge_spatial_max()
 
     out = _run_bridge(mod, sender_legacy_msgs)
     dist_legacy = out[-1][1][2]

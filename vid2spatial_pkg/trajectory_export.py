@@ -25,12 +25,19 @@ Row schema (one row per tracked frame):
     az_adm_deg   float  = -az_deg     (bridge OscTranslator.az_pipeline_to_adm)
     el_adm_deg   float  = el_deg
     dist_adm     float  = 1 - dist_norm  (bridge OscTranslator.dist_v2s_to_adm, the
-                        /vid2spatial/distance path, 10 m). CAVEAT: send_frame emits
-                        /vid2spatial/spatial LAST and the bridge's _handle_spatial
-                        normalises dist_m with 20 m and overwrites the track, so a
-                        live bridge currently forwards dist_m/20 = half of this
-                        column until the bridge is unified on 10 m (engine-repo item).
+                        /vid2spatial/distance path, 10 m). Since the A10 fix
+                        send_frame no longer emits /vid2spatial/spatial by
+                        default, so the live wire agrees with this column; the
+                        legacy bundle (--legacy-spatial) still lets the bridge
+                        re-normalise metres with its own constant.
     confidence   float  tracker confidence (0-1), 1.0 if absent
+    av_confidence float audio-visual correlation score for the WHOLE clip,
+                        repeated on every row (it is one number per pairing,
+                        not per frame). Empty when it was never computed.
+                        Near 0 means the pairing is UNVERIFIED -- see
+                        av_correlation and docs/ISSUES.md I11. The CSV carries
+                        only this scalar; the warning text and the diagnostic
+                        fields (pearson, lag_frames, r_null) are JSON-only.
 
 CSV: header row + rows above.  JSON: {"format": "vid2spatial-automation",
 "version": 1, "fps", "object_id", "distance_max_m", "frames": [row, ...]}.
@@ -53,6 +60,10 @@ COLUMNS: Sequence[str] = (
     "az_adm_deg", "el_adm_deg", "dist_adm",
     "confidence",
 )
+
+# One per clip, not per frame, so it is appended to every CSV row rather than
+# produced by frame_to_row. Kept out of COLUMNS, which is the per-frame schema.
+AV_COLUMN = "av_confidence"
 
 # Mirrors foa_render.apply_distance_gain_lpf (hardcoded ISL branch).
 _R_NEAR = 1.0
@@ -127,15 +138,31 @@ def export_trajectory_csv(
     fps: float = 30.0,
     object_id: int = 1,
     distance_max_m: float = 10.0,
+    av_confidence: Optional[Union[Dict, float]] = None,
 ) -> Path:
-    """Write the trajectory as CSV (header = COLUMNS). Returns the path."""
+    """Write the trajectory as CSV (header = COLUMNS + av_confidence).
+
+    ``av_confidence`` is one number for the clip, so it repeats on every row.
+    Until 2026-09-04 the CSV dropped it entirely, which silently discarded the
+    audio-visual gate for anyone exporting to a DAW rather than to JSON.
+    """
     rows = trajectory_to_rows(_frames_of(trajectory), fps, object_id, distance_max_m)
+    if av_confidence is None and isinstance(trajectory, dict):
+        av_confidence = trajectory.get("av_confidence")
+    score = ""
+    if isinstance(av_confidence, dict):
+        v = av_confidence.get("av_confidence")
+        score = f"{float(v):.6f}" if isinstance(v, (int, float)) else ""
+    elif isinstance(av_confidence, (int, float)):
+        score = f"{float(av_confidence):.6f}"
     path = Path(path)
     with open(path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(COLUMNS))
+        w = csv.DictWriter(fh, fieldnames=list(COLUMNS) + [AV_COLUMN])
         w.writeheader()
         for r in rows:
-            w.writerow({k: (f"{v:.6f}" if isinstance(v, float) else v) for k, v in r.items()})
+            row = {k: (f"{v:.6f}" if isinstance(v, float) else v) for k, v in r.items()}
+            row[AV_COLUMN] = score
+            w.writerow(row)
     return path
 
 
@@ -145,9 +172,18 @@ def export_trajectory_json(
     fps: float = 30.0,
     object_id: int = 1,
     distance_max_m: float = 10.0,
+    av_confidence: Optional[Dict] = None,
 ) -> Path:
-    """Write the trajectory as ADM-OSC-shaped JSON. Returns the path."""
+    """Write the trajectory as ADM-OSC-shaped JSON. Returns the path.
+
+    ``av_confidence`` is the audio-visual correlation report from
+    ``av_correlation.av_confidence`` (or the trajectory's own
+    ``av_confidence`` key). It says whether the audio is plausibly related to
+    the tracked object at all; see that module for what it cannot show.
+    """
     rows = trajectory_to_rows(_frames_of(trajectory), fps, object_id, distance_max_m)
+    if av_confidence is None and isinstance(trajectory, dict):
+        av_confidence = trajectory.get("av_confidence")
     doc = {
         "format": FORMAT_NAME,
         "version": FORMAT_VERSION,
@@ -156,6 +192,7 @@ def export_trajectory_json(
         "distance_max_m": float(distance_max_m),
         "osc_address": f"/adm/obj/{int(object_id)}/aed",
         "columns": list(COLUMNS),
+        "av_confidence": av_confidence,
         "frames": rows,
     }
     path = Path(path)
@@ -186,7 +223,8 @@ def read_automation_csv(path: Union[str, Path]) -> List[Dict[str, float]]:
     with open(path, newline="") as fh:
         for r in csv.DictReader(fh):
             out.append({
-                k: (int(v) if k in ("frame", "object_id") else float(v))
+                k: (int(v) if k in ("frame", "object_id")
+                    else (None if v == "" else float(v)))
                 for k, v in r.items()
             })
     return out

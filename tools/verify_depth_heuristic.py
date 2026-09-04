@@ -174,9 +174,16 @@ def find_gt(explicit: Optional[str], repo: Path) -> Optional[Path]:
     return None
 
 
-def _track_metrics(areas: List[float], gt: np.ndarray, frame_areas: Optional[List[float]]) -> Dict:
-    """Heuristic (1) calibrated on the track's first record; (2) from area fraction."""
-    proxy = np.array(compute_bbox_scale_proxy(areas, initial_depth_m=float(gt[0])))
+def _track_metrics(areas: List[float], gt: np.ndarray, frame_areas: Optional[List[float]],
+                   z0: Optional[float] = None) -> Dict:
+    """Heuristic (1) calibrated on the track's first record; (2) from area fraction.
+
+    ``z0`` overrides the oracle calibration depth ``gt[0]`` with an ESTIMATE,
+    which is what the deployed system actually has. The resulting error is the
+    composed one: proxy error compounded with z0-estimation error.
+    """
+    proxy = np.array(compute_bbox_scale_proxy(
+        areas, initial_depth_m=float(gt[0] if z0 is None else z0)))
     err = np.abs(proxy - gt)
     out = {
         "n": int(len(gt)),
@@ -194,7 +201,16 @@ def _track_metrics(areas: List[float], gt: np.ndarray, frame_areas: Optional[Lis
     return out
 
 
-def evaluate_against_gt(gt_path: Path) -> Dict:
+def load_z0(path: Optional[str]) -> Optional[Dict[str, float]]:
+    """{track: z0_m} from tools/estimate_z0_depth_model.py (or a bare mapping)."""
+    if not path:
+        return None
+    doc = json.loads(Path(path).read_text())
+    z0 = doc.get("z0", doc) if isinstance(doc, dict) else doc
+    return {str(k): float(v) for k, v in z0.items()}
+
+
+def evaluate_against_gt(gt_path: Path, z0_map: Optional[Dict[str, float]] = None) -> Dict:
     """GT = list of {"area": px^2, "depth_m": m, ["track": str], ["frame_area": px^2]}.
 
     Without "track" the whole file is one track calibrated on record 0
@@ -209,6 +225,11 @@ def evaluate_against_gt(gt_path: Path) -> Dict:
     groups: Dict[str, List[Dict]] = {}
     for r in recs:
         groups.setdefault(str(r.get("track", "_single")), []).append(r)
+    if z0_map is not None:
+        # only tracks the depth model actually produced an estimate for
+        groups = {k: v for k, v in groups.items() if k in z0_map}
+        if not groups:
+            return {"n": 0, "note": "no GT track matches the --z0-from file"}
 
     per_track: Dict[str, Dict] = {}
     pooled_err: List[np.ndarray] = []
@@ -218,10 +239,15 @@ def evaluate_against_gt(gt_path: Path) -> Dict:
         areas = [float(r["area"]) for r in rs]
         gt = np.array([float(r["depth_m"]) for r in rs])
         fa = [float(r["frame_area"]) for r in rs] if has_frame_area else None
-        m = _track_metrics(areas, gt, fa)
+        z0 = z0_map.get(name) if z0_map else None
+        m = _track_metrics(areas, gt, fa, z0)
         m["type"] = rs[0].get("type")
+        if z0 is not None:
+            m["z0_est_m"] = round(float(z0), 3)
+            m["z0_true_m"] = round(float(gt[0]), 3)
         per_track[name] = m
-        proxy = np.array(compute_bbox_scale_proxy(areas, initial_depth_m=float(gt[0])))
+        proxy = np.array(compute_bbox_scale_proxy(
+            areas, initial_depth_m=float(gt[0] if z0 is None else z0)))
         pooled_err.append(np.abs(proxy - gt))
         pooled_gt.append(gt)
         pooled_proxy.append(proxy)
@@ -248,6 +274,7 @@ def evaluate_against_gt(gt_path: Path) -> Dict:
         "track_median_spearman": float(np.median(tr_sp)) if len(tr_sp) else float("nan"),
         "track_frac_spearman_gt_0_5": float(np.mean(tr_sp > 0.5)) if len(tr_sp) else float("nan"),
         "gt_file": str(gt_path),
+        "z0_source": "estimated (composed error)" if z0_map else "ground truth (proxy term only)",
     }
     if has_frame_area:
         d_rel_all = np.concatenate([
@@ -282,6 +309,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--gt", default=None, help="GT json [{area, depth_m}, ...]")
     ap.add_argument("--json", default=None, help="write full report here")
+    ap.add_argument("--z0-from", default=None, metavar="JSON",
+                    help="{track: z0_m} of ESTIMATED calibration depths "
+                         "(tools/estimate_z0_depth_model.py). Replaces the oracle "
+                         "gt[0] calibration, turning the proxy-only number into the "
+                         "composed depth-model + proxy number. Tracks absent from the "
+                         "file are skipped.")
     a = ap.parse_args(argv)
 
     repo = Path(__file__).resolve().parent.parent
@@ -303,7 +336,9 @@ def main(argv=None) -> int:
         }
         print("\nground truth: NONE FOUND — " + report["ground_truth"]["note"])
     else:
-        report["ground_truth"] = {"available": True, **evaluate_against_gt(gt_path)}
+        z0_map = load_z0(a.z0_from)
+        report["ground_truth"] = {"available": True,
+                                  **evaluate_against_gt(gt_path, z0_map)}
         summary = {k: v for k, v in report["ground_truth"].items() if k != "per_track"}
         print(f"\nground truth: {json.dumps(summary, indent=2)}")
 
@@ -317,7 +352,8 @@ def main(argv=None) -> int:
                    "the pinhole model is the heuristic's own inverse — supply --gt for real error)")
     else:
         g = report["ground_truth"]
-        verdict = (f"SYNTHETIC PASS + METRIC GT: AbsRel {g['abs_rel']:.3f}, delta1 {g['delta1']:.3f}, "
+        kind = "COMPOSED (estimated z0)" if a.z0_from else "METRIC GT (oracle z0)"
+        verdict = (f"SYNTHETIC PASS + {kind}: AbsRel {g['abs_rel']:.3f}, delta1 {g['delta1']:.3f}, "
                    f"Spearman {g['spearman']:.3f} over {g['n']} records / {g['n_tracks']} tracks")
     print("\nRESULT:", verdict)
     return 0 if all_pass else 1

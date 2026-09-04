@@ -54,7 +54,7 @@ Video / Sketch
 > pixel error. The independent geometry check is `tools/eval_azimuth_kitti.py`, which
 > takes ground truth from KITTI 3D label centres (`atan2(x_cam, z_cam)`): the deployed
 > 60° assumption costs **3.79° AzMAE**, dropping to 0.41° with the true intrinsics.
-> See `reports/azimuth_kitti_2026-09-04.md`.
+> See `reports/azimuth_kitti_2026-09-04.md` and `docs/ISSUES.md` I4.
 
 ### Render options added 2026-09-04 (all opt-in)
 
@@ -70,6 +70,54 @@ to commit `09289ea` — pinned by `test/render_golden_09289ea.json` and checked 
 | `doppler` | `False` | pitch-shift by the radial velocity |
 | `motion_mode` | `"camera_frame"` | `"world_frame"` subtracts estimated camera yaw so a static source stays put during a pan |
 | `fov_from_metadata` | `False` | read the real field of view from container metadata instead of assuming 60° |
+
+### Learned end-to-end mono→binaural does not beat a mono floor
+
+The closest published family to an end-to-end alternative, 2.5D Visual Sound,
+was run pretrained on FAIR-Play test clips and its output binaural scored
+against the recorded ground-truth binaural with the same ITD-inversion harness
+used on our own output, so the inversion floor is common-mode.
+
+| Condition (80 FAIR-Play clips) | AzMAE vs recorded GT |
+|---|---|
+| 2.5D Visual Sound (ILD read-out) | 19.60° |
+| 2.5D Visual Sound (ITD read-out) | 18.81° |
+| Mono, i.e. no spatialisation at all | 18.82° |
+
+It beats the mono floor on only **25%** of clips, and the correlation between
+its ILD and the true ILD is **0.023**. Learned mono→binaural spatialisation, in
+this configuration, adds no usable azimuth.
+
+This is a *different dataset and protocol* from the 1.36° tracking number above
+and the two must not be compared directly: FAIR-Play is recorded binaural music
+in a room, LaSOT is visual tracking. What the result supports is the choice of a
+deterministic geometric pipeline over a learned end-to-end one, not a claim that
+this system is 14x better. Source: `test/full_eval/E2E_COMPARISON.json`,
+produced by `test/run_e2e_comparison.py`; our own binaural ITD-inversion floor
+on the same harness is 7.27° (`BINAURAL_AZ_INVERSION.json`, produced by
+`test/run_binaural_az_inversion.py`). Re-running the comparison needs the
+pretrained 2.5D Visual Sound checkpoint, which is not in the repo (`*.pth` is
+gitignored); the committed JSON is the record of the run.
+
+### Trajectory stabilisation is nearly free
+
+Turning the stabiliser on (80 ms angle smoothing, d_rel attack 0.7 s / release
+0.2 s) over the same 22 clips:
+
+| Metric | Off | On | Change |
+|---|---|---|---|
+| Azimuth jitter | 691 | 17 | **40× lower** |
+| Azimuth jerk | 4.69e7 | 6.60e3 | **7000× lower** |
+| Elevation jitter | 342 | 8.1 | 42× lower |
+| AzMAE | 1.3641° | 1.3669° | +0.0028° |
+
+Four decimal places of accuracy buy two orders of magnitude of smoothness.
+Source: `test/full_eval/STABILIZATION_PROXY_ABLATION.json`, produced by
+`test/run_stabilization_and_proxy_ablation.py`. The AzMAE column
+inherits the circularity caveat above; the jitter and jerk columns do not,
+since they are properties of the output trajectory alone.
+
+Known defects and limitations: `docs/ISSUES.md`.
 
 ---
 
@@ -159,9 +207,9 @@ Writes one row per tracked frame: `frame, t_s, object_id, az_deg, el_deg, dist_m
 dist_norm, gain_lin, az_adm_deg, el_adm_deg, dist_adm, confidence`. The `*_adm`
 columns already apply the bridge contract (`az_adm = -az`, `dist_adm = 1 - dist_norm`),
 so they map 1:1 onto `/adm/obj/N/aed` via the bridge's `/vid2spatial/distance`
-path (10 m). Caveat: the bridge's `/vid2spatial/spatial` handler (emitted last by
-`send_frame`) still normalises with 20 m, so a live bridge currently forwards
-`dist_m/20` until it is unified on 10 m (engine-repo item). `automation_path` is
+path (10 m), which is now the only distance the sender emits (see `docs/ISSUES.md`
+I1 for the legacy `/vid2spatial/spatial` bundle and the `--legacy-spatial` flag).
+`automation_path` is
 read from an argparse namespace as `--automation-path` if your parser defines it. Note: spatial_engine has no per-object
 trajectory loader (its `TimelineJson` only carries scene-snapshot keyframes), so this
 is a documented interchange format, not a native engine file.
@@ -252,6 +300,7 @@ changed port, or renamed address fails.
 ```bash
 python tools/verify_depth_heuristic.py            # synthetic pinhole checks (CPU, <1s)
 python tools/verify_depth_heuristic.py --gt gt.json   # [{area, depth_m}] → MAE / AbsRel / Spearman
+python tools/fetch_kitti_frames.py --out DIR          # KITTI frames by HTTP range out of the 15.8 GB image zip (idempotent, skips frames already present)
 ```
 
 The bbox-area depth proxy (`depth_utils.compute_bbox_scale_proxy`, z ∝ 1/√area)
@@ -291,7 +340,7 @@ vid2spatial_pkg/
   bridge_contract.yaml    # OSC wire contract (emitted + bridge-side, see tools/extract_bridge_contract.py)
   config.py               # dataclass configs
   depth_utils.py          # MiDaS / DA-V2 depth backends
-  multi_source.py         # multi-object spatial audio
+  pipeline.py             # multi-object rendering lives here (_render_multi_source)
 
 test/
   test_unit.py            # unit suite (no models)

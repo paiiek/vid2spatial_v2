@@ -11,15 +11,15 @@ vid2spatial/
 │   │  ── Pipeline ──
 │   ├── pipeline.py               # End-to-end pipeline orchestration
 │   ├── config.py                 # Configuration management
-│   ├── multi_source.py           # Multi-source FOA mixing
+│   │                             # (multi-source FOA mixing lives in pipeline.py)
 │   │
 │   │  ── Detection & Tracking ──
 │   ├── hybrid_tracker.py         # Adaptive-K hybrid tracker (DINO + YOLO/ByteTrack)
 │   ├── vision.py                 # Camera geometry (pixel_to_ray, ray_to_angles)
-│   ├── color_tracker.py          # Color-based tracking backend
-│   ├── point_tracker.py          # Single-point tracking backend
-│   ├── skeleton_tracker.py       # Human skeleton keypoint tracking
-│   ├── ostrack_wrapper.py        # OSTrack integration wrapper
+│   ├── experimental/color_tracker.py  # Color-based tracking backend (UNBENCHMARKED)
+│   ├── experimental/point_tracker.py  # Single-point tracking backend (UNBENCHMARKED)
+│   ├── experimental/skeleton_tracker.py  # Human skeleton keypoint tracking (UNBENCHMARKED)
+│   ├── experimental/ostrack_wrapper.py  # OSTrack integration wrapper (UNBENCHMARKED)
 │   ├── sam2_adapter.py           # SAM2 mask refinement adapter
 │   │
 │   │  ── Trajectory Processing ──

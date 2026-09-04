@@ -1,0 +1,594 @@
+{
+  "modes": [
+    "bbox_area",
+    "bbox_area_log"
+  ],
+  "n_clips": 22,
+  "stimulus": "fixed pink noise, identical across clips and conditions",
+  "summary": {
+    "bbox_area": {
+      "lufs_integrated": {
+        "mean": -40.97,
+        "sd": 5.54,
+        "n": 22
+      },
+      "lufs_range_db": {
+        "mean": 1.83,
+        "sd": 3.45,
+        "n": 22
+      },
+      "centroid_range_hz": {
+        "mean": 990.95,
+        "sd": 705.45,
+        "n": 22
+      },
+      "centroid_hz_p10": {
+        "mean": 2772.4,
+        "sd": 1116.3,
+        "n": 22
+      },
+      "centroid_hz_p90": {
+        "mean": 3763.33,
+        "sd": 1266.47,
+        "n": 22
+      }
+    },
+    "bbox_area_log": {
+      "lufs_integrated": {
+        "mean": -39.71,
+        "sd": 4.92,
+        "n": 22
+      },
+      "lufs_range_db": {
+        "mean": 2.51,
+        "sd": 3.07,
+        "n": 22
+      },
+      "centroid_range_hz": {
+        "mean": 1085.83,
+        "sd": 538.12,
+        "n": 22
+      },
+      "centroid_hz_p10": {
+        "mean": 3170.05,
+        "sd": 1001.21,
+        "n": 22
+      },
+      "centroid_hz_p90": {
+        "mean": 4255.88,
+        "sd": 1020.06,
+        "n": 22
+      }
+    }
+  },
+  "per_clip": {
+    "car-5": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -43.46,
+        "lufs_range_db": 1.92,
+        "lufs_st_min": -44.66,
+        "lufs_st_max": -42.7,
+        "centroid_hz_p10": 2539.4,
+        "centroid_hz_p90": 3578.0,
+        "centroid_range_hz": 1038.7,
+        "peak": 0.0499
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -39.52,
+        "lufs_range_db": 4.18,
+        "lufs_st_min": -42.38,
+        "lufs_st_max": -38.19,
+        "centroid_hz_p10": 3395.0,
+        "centroid_hz_p90": 4544.5,
+        "centroid_range_hz": 1149.5,
+        "peak": 0.0792
+      }
+    },
+    "car-10": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -45.06,
+        "lufs_range_db": 0.46,
+        "lufs_st_min": -45.29,
+        "lufs_st_max": -44.78,
+        "centroid_hz_p10": 2071.3,
+        "centroid_hz_p90": 2686.1,
+        "centroid_range_hz": 614.8,
+        "peak": 0.0421
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -43.69,
+        "lufs_range_db": 1.77,
+        "lufs_st_min": -44.57,
+        "lufs_st_max": -42.73,
+        "centroid_hz_p10": 2335.3,
+        "centroid_hz_p90": 3408.5,
+        "centroid_range_hz": 1073.3,
+        "peak": 0.0471
+      }
+    },
+    "car-13": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -44.6,
+        "lufs_range_db": 0.82,
+        "lufs_st_min": -44.96,
+        "lufs_st_max": -44.07,
+        "centroid_hz_p10": 2228.4,
+        "centroid_hz_p90": 2950.3,
+        "centroid_range_hz": 721.9,
+        "peak": 0.0431
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -42.14,
+        "lufs_range_db": 2.42,
+        "lufs_st_min": -43.53,
+        "lufs_st_max": -40.71,
+        "centroid_hz_p10": 2953.1,
+        "centroid_hz_p90": 3913.6,
+        "centroid_range_hz": 960.6,
+        "peak": 0.0517
+      }
+    },
+    "dog-1": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -40.03,
+        "lufs_range_db": 10.28,
+        "lufs_st_min": -45.19,
+        "lufs_st_max": -34.82,
+        "centroid_hz_p10": 2197.0,
+        "centroid_hz_p90": 4430.3,
+        "centroid_range_hz": 2233.3,
+        "peak": 0.1535
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -39.02,
+        "lufs_range_db": 10.24,
+        "lufs_st_min": -44.55,
+        "lufs_st_max": -34.21,
+        "centroid_hz_p10": 2566.5,
+        "centroid_hz_p90": 4835.1,
+        "centroid_range_hz": 2268.6,
+        "peak": 0.1535
+      }
+    },
+    "dog-3": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -45.17,
+        "lufs_range_db": 0.18,
+        "lufs_st_min": -45.29,
+        "lufs_st_max": -45.09,
+        "centroid_hz_p10": 2065.4,
+        "centroid_hz_p90": 2610.1,
+        "centroid_range_hz": 544.7,
+        "peak": 0.0423
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -44.19,
+        "lufs_range_db": 0.44,
+        "lufs_st_min": -44.36,
+        "lufs_st_max": -43.88,
+        "centroid_hz_p10": 2463.4,
+        "centroid_hz_p90": 3006.9,
+        "centroid_range_hz": 543.5,
+        "peak": 0.0456
+      }
+    },
+    "dog-9": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -44.73,
+        "lufs_range_db": 0.31,
+        "lufs_st_min": -44.89,
+        "lufs_st_max": -44.46,
+        "centroid_hz_p10": 2215.4,
+        "centroid_hz_p90": 2851.4,
+        "centroid_range_hz": 636.0,
+        "peak": 0.0432
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -42.5,
+        "lufs_range_db": 0.76,
+        "lufs_st_min": -43.1,
+        "lufs_st_max": -41.9,
+        "centroid_hz_p10": 2919.9,
+        "centroid_hz_p90": 3764.3,
+        "centroid_range_hz": 844.4,
+        "peak": 0.0519
+      }
+    },
+    "dog-14": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -44.81,
+        "lufs_range_db": 0.8,
+        "lufs_st_min": -45.21,
+        "lufs_st_max": -44.34,
+        "centroid_hz_p10": 2152.8,
+        "centroid_hz_p90": 2794.0,
+        "centroid_range_hz": 641.2,
+        "peak": 0.0424
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -42.75,
+        "lufs_range_db": 2.28,
+        "lufs_st_min": -43.89,
+        "lufs_st_max": -41.51,
+        "centroid_hz_p10": 2633.1,
+        "centroid_hz_p90": 3717.3,
+        "centroid_range_hz": 1084.2,
+        "peak": 0.0537
+      }
+    },
+    "horse-1": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -31.49,
+        "lufs_range_db": 0.65,
+        "lufs_st_min": -33.71,
+        "lufs_st_max": -31.31,
+        "centroid_hz_p10": 3900.4,
+        "centroid_hz_p90": 5669.3,
+        "centroid_range_hz": 1768.9,
+        "peak": 0.16
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -31.54,
+        "lufs_range_db": 0.9,
+        "lufs_st_min": -34.42,
+        "lufs_st_max": -31.31,
+        "centroid_hz_p10": 4315.3,
+        "centroid_hz_p90": 5675.6,
+        "centroid_range_hz": 1360.3,
+        "peak": 0.161
+      }
+    },
+    "horse-3": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -40.29,
+        "lufs_range_db": 7.2,
+        "lufs_st_min": -45.19,
+        "lufs_st_max": -35.19,
+        "centroid_hz_p10": 2163.9,
+        "centroid_hz_p90": 4371.4,
+        "centroid_range_hz": 2207.6,
+        "peak": 0.1453
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -39.51,
+        "lufs_range_db": 7.64,
+        "lufs_st_min": -44.35,
+        "lufs_st_max": -34.56,
+        "centroid_hz_p10": 2632.4,
+        "centroid_hz_p90": 4705.9,
+        "centroid_range_hz": 2073.5,
+        "peak": 0.1453
+      }
+    },
+    "horse-11": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -37.19,
+        "lufs_range_db": 13.04,
+        "lufs_st_min": -45.1,
+        "lufs_st_max": -31.49,
+        "centroid_hz_p10": 2183.9,
+        "centroid_hz_p90": 5479.3,
+        "centroid_range_hz": 3295.4,
+        "peak": 0.1385
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -36.71,
+        "lufs_range_db": 11.3,
+        "lufs_st_min": -43.5,
+        "lufs_st_max": -31.41,
+        "centroid_hz_p10": 2840.2,
+        "centroid_hz_p90": 5479.3,
+        "centroid_range_hz": 2639.1,
+        "peak": 0.1385
+      }
+    },
+    "motorcycle-1": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -43.63,
+        "lufs_range_db": 0.79,
+        "lufs_st_min": -44.26,
+        "lufs_st_max": -43.07,
+        "centroid_hz_p10": 2545.8,
+        "centroid_hz_p90": 3415.5,
+        "centroid_range_hz": 869.7,
+        "peak": 0.0464
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -39.87,
+        "lufs_range_db": 1.67,
+        "lufs_st_min": -41.4,
+        "lufs_st_max": -38.89,
+        "centroid_hz_p10": 3505.1,
+        "centroid_hz_p90": 4374.3,
+        "centroid_range_hz": 869.1,
+        "peak": 0.0761
+      }
+    },
+    "motorcycle-3": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -31.35,
+        "lufs_range_db": 0.07,
+        "lufs_st_min": -31.39,
+        "lufs_st_max": -31.31,
+        "centroid_hz_p10": 5067.2,
+        "centroid_hz_p90": 5714.2,
+        "centroid_range_hz": 647.0,
+        "peak": 0.163
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -31.35,
+        "lufs_range_db": 0.07,
+        "lufs_st_min": -31.39,
+        "lufs_st_max": -31.31,
+        "centroid_hz_p10": 5067.2,
+        "centroid_hz_p90": 5714.2,
+        "centroid_range_hz": 647.0,
+        "peak": 0.163
+      }
+    },
+    "motorcycle-6": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -44.62,
+        "lufs_range_db": 0.49,
+        "lufs_st_min": -44.9,
+        "lufs_st_max": -44.38,
+        "centroid_hz_p10": 2268.6,
+        "centroid_hz_p90": 2931.2,
+        "centroid_range_hz": 662.6,
+        "peak": 0.044
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -42.2,
+        "lufs_range_db": 1.7,
+        "lufs_st_min": -43.28,
+        "lufs_st_max": -41.36,
+        "centroid_hz_p10": 3082.6,
+        "centroid_hz_p90": 3837.2,
+        "centroid_range_hz": 754.6,
+        "peak": 0.0544
+      }
+    },
+    "skateboard-8": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -45.22,
+        "lufs_range_db": 0.33,
+        "lufs_st_min": -45.42,
+        "lufs_st_max": -45.0,
+        "centroid_hz_p10": 2031.7,
+        "centroid_hz_p90": 2628.0,
+        "centroid_range_hz": 596.3,
+        "peak": 0.0421
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -44.67,
+        "lufs_range_db": 1.32,
+        "lufs_st_min": -45.37,
+        "lufs_st_max": -43.89,
+        "centroid_hz_p10": 2154.8,
+        "centroid_hz_p90": 3043.4,
+        "centroid_range_hz": 888.6,
+        "peak": 0.0437
+      }
+    },
+    "skateboard-11": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -45.21,
+        "lufs_range_db": 0.38,
+        "lufs_st_min": -45.43,
+        "lufs_st_max": -44.9,
+        "centroid_hz_p10": 2024.0,
+        "centroid_hz_p90": 2595.9,
+        "centroid_range_hz": 571.9,
+        "peak": 0.042
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -44.69,
+        "lufs_range_db": 1.41,
+        "lufs_st_min": -45.43,
+        "lufs_st_max": -43.48,
+        "centroid_hz_p10": 2070.8,
+        "centroid_hz_p90": 2930.9,
+        "centroid_range_hz": 860.1,
+        "peak": 0.0562
+      }
+    },
+    "skateboard-17": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -45.29,
+        "lufs_range_db": 0.21,
+        "lufs_st_min": -45.42,
+        "lufs_st_max": -45.19,
+        "centroid_hz_p10": 2021.1,
+        "centroid_hz_p90": 2570.9,
+        "centroid_range_hz": 549.8,
+        "peak": 0.042
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -45.23,
+        "lufs_range_db": 0.26,
+        "lufs_st_min": -45.33,
+        "lufs_st_max": -45.02,
+        "centroid_hz_p10": 2023.1,
+        "centroid_hz_p90": 2609.4,
+        "centroid_range_hz": 586.3,
+        "peak": 0.042
+      }
+    },
+    "train-16": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -31.64,
+        "lufs_range_db": 0.77,
+        "lufs_st_min": -32.12,
+        "lufs_st_max": -31.32,
+        "centroid_hz_p10": 4782.3,
+        "centroid_hz_p90": 5703.1,
+        "centroid_range_hz": 920.8,
+        "peak": 0.163
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -31.71,
+        "lufs_range_db": 0.98,
+        "lufs_st_min": -32.33,
+        "lufs_st_max": -31.32,
+        "centroid_hz_p10": 4817.6,
+        "centroid_hz_p90": 5703.1,
+        "centroid_range_hz": 885.4,
+        "peak": 0.163
+      }
+    },
+    "train-17": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -31.35,
+        "lufs_range_db": 0.07,
+        "lufs_st_min": -31.39,
+        "lufs_st_max": -31.31,
+        "centroid_hz_p10": 5067.2,
+        "centroid_hz_p90": 5714.2,
+        "centroid_range_hz": 647.0,
+        "peak": 0.163
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -31.35,
+        "lufs_range_db": 0.07,
+        "lufs_st_min": -31.39,
+        "lufs_st_max": -31.31,
+        "centroid_hz_p10": 5067.2,
+        "centroid_hz_p90": 5714.2,
+        "centroid_range_hz": 647.0,
+        "peak": 0.163
+      }
+    },
+    "drone-2": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -44.68,
+        "lufs_range_db": 0.56,
+        "lufs_st_min": -45.01,
+        "lufs_st_max": -44.39,
+        "centroid_hz_p10": 2239.7,
+        "centroid_hz_p90": 2994.0,
+        "centroid_range_hz": 754.3,
+        "peak": 0.0439
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -42.35,
+        "lufs_range_db": 1.87,
+        "lufs_st_min": -43.32,
+        "lufs_st_max": -41.38,
+        "centroid_hz_p10": 2983.7,
+        "centroid_hz_p90": 3921.4,
+        "centroid_range_hz": 937.8,
+        "peak": 0.0546
+      }
+    },
+    "drone-6": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -45.06,
+        "lufs_range_db": 0.37,
+        "lufs_st_min": -45.22,
+        "lufs_st_max": -44.81,
+        "centroid_hz_p10": 2076.9,
+        "centroid_hz_p90": 2687.9,
+        "centroid_range_hz": 611.0,
+        "peak": 0.0424
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -43.8,
+        "lufs_range_db": 2.28,
+        "lufs_st_min": -44.84,
+        "lufs_st_max": -42.46,
+        "centroid_hz_p10": 2417.6,
+        "centroid_hz_p90": 3497.9,
+        "centroid_range_hz": 1080.2,
+        "peak": 0.0506
+      }
+    },
+    "drone-13": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -45.02,
+        "lufs_range_db": 0.49,
+        "lufs_st_min": -45.22,
+        "lufs_st_max": -44.63,
+        "centroid_hz_p10": 2083.1,
+        "centroid_hz_p90": 2704.0,
+        "centroid_range_hz": 621.0,
+        "peak": 0.0423
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -43.51,
+        "lufs_range_db": 1.62,
+        "lufs_st_min": -44.26,
+        "lufs_st_max": -42.38,
+        "centroid_hz_p10": 2430.1,
+        "centroid_hz_p90": 3518.2,
+        "centroid_range_hz": 1088.2,
+        "peak": 0.0461
+      }
+    },
+    "guitar-9": {
+      "n_frames": 300,
+      "dur_s": 12.0,
+      "bbox_area": {
+        "lufs_integrated": -31.35,
+        "lufs_range_db": 0.07,
+        "lufs_st_min": -31.39,
+        "lufs_st_max": -31.31,
+        "centroid_hz_p10": 5067.2,
+        "centroid_hz_p90": 5714.2,
+        "centroid_range_hz": 647.0,
+        "peak": 0.163
+      },
+      "bbox_area_log": {
+        "lufs_integrated": -31.35,
+        "lufs_range_db": 0.07,
+        "lufs_st_min": -31.39,
+        "lufs_st_max": -31.31,
+        "centroid_hz_p10": 5067.2,
+        "centroid_hz_p90": 5714.2,
+        "centroid_range_hz": 647.0,
+        "peak": 0.163
+      }
+    }
+  }
+}

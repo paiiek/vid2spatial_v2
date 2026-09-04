@@ -15,6 +15,8 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 V2_ROOT    = SCRIPT_DIR.parent.parent
 JOBS_DIR   = SCRIPT_DIR / "jobs"
 SOFA_PATH  = "/home/seung/mmhoa/text2hoa/renderer/hrtf/kemar.sofa"
+# Demo-only listening level. The library default is None (no make-up gain).
+DEMO_PEAK_DBFS = -1.0
 FFMPEG     = "/home/seung/miniforge3/bin/ffmpeg"
 PYTHON     = "/home/seung/miniforge3/bin/python3"
 
@@ -384,7 +386,8 @@ def run_pipeline(job_id: str, video_path: str, audio_path: str,
                  bbox: tuple, out_dir: Path,
                  mode: str = "accurate",   # "realtime" | "accurate"
                  render_foa: bool = False,
-                 depth_backend: str = "midas"):
+                 depth_backend: str = "midas",
+                 foa_norm: str = "legacy"):
     try:
         jobs[job_id]["status"] = "extracting_frames"
         frames_dir = out_dir / "frames"
@@ -450,6 +453,16 @@ def run_pipeline(job_id: str, video_path: str, audio_path: str,
                 enhance_depth=False,
             )
 
+        # Record the render contract beside the trajectory, so a downloaded
+        # WAV is never separated from the convention it was written in.
+        trajectory.setdefault("render", {}).update({
+            "foa_norm": foa_norm,
+            "foa_channel_order": "ACN [W, Y, Z, X]",
+            "foa_norm_detail": (
+                "ACN/N3D scaled by 1/sqrt(2); NOT SN3D (docs/ISSUES.md I12)"
+                if foa_norm == "legacy" else "ACN/SN3D (AmbiX)"),
+            "peak_dbfs": DEMO_PEAK_DBFS,
+        })
         traj_path = out_dir / "traj.json"
         with open(traj_path, "w") as f:
             json.dump(trajectory, f, indent=2)
@@ -470,11 +483,16 @@ def run_pipeline(job_id: str, video_path: str, audio_path: str,
         # Render binaural
         from vid2spatial_pkg.foa_render import render_binaural_from_trajectory
         binaural_path = out_dir / "binaural.wav"
+        # The demo exists to be listened to, so it normalises. Stimulus
+        # generation must not: the library default is peak_dbfs=None and the
+        # golden depends on it. Measured on a 2 s LaSOT clip, the un-normalised
+        # render peaks at -63.77 dBFS (docs/ISSUES.md I16).
         render_binaural_from_trajectory(
             audio_path=audio_path,
             trajectory=trajectory,
             output_path=str(binaural_path),
             sofa_path=SOFA_PATH,
+            peak_dbfs=DEMO_PEAK_DBFS,
             smooth_ms=80.0,
             dist_gain_k=1.5,
             gain_min=0.10,
@@ -497,6 +515,8 @@ def run_pipeline(job_id: str, video_path: str, audio_path: str,
                 audio_path=audio_path,
                 trajectory=trajectory,
                 output_path=str(foa_path),
+                foa_norm=foa_norm,
+                peak_dbfs=DEMO_PEAK_DBFS,
                 smooth_ms=80.0,
                 dist_gain_k=1.5,
                 gain_min=0.10,
@@ -543,6 +563,8 @@ def run_pipeline(job_id: str, video_path: str, audio_path: str,
             "overlay":  str(overlay_path) if overlay_path.exists() else None,
             "traj":     str(traj_path),
             "traj_url":  f"/jobs/{job_id}/traj.json",
+            "foa_norm": foa_norm,
+            "peak_dbfs": DEMO_PEAK_DBFS,
             "n_frames": len(trajectory.get("frames", [])),
         }
 
@@ -719,6 +741,10 @@ class Handler(BaseHTTPRequestHandler):
             if depth_backend not in ("none", "midas"):
                 self._json({"error": f"unknown depth_backend {depth_backend!r}"}, 400)
                 return
+            foa_norm = data.get("foa_norm", "legacy")
+            if foa_norm not in ("legacy", "sn3d"):
+                self._json({"error": f"unknown foa_norm {foa_norm!r}"}, 400)
+                return
 
             jobs[job_id]["status"] = "queued"
             jobs[job_id]["result"] = None
@@ -728,7 +754,8 @@ class Handler(BaseHTTPRequestHandler):
                 target=run_pipeline,
                 args=(job_id, video_path, audio_src, bbox_tuple, job_dir),
                 kwargs={"mode": mode, "render_foa": render_foa,
-                        "depth_backend": depth_backend},
+                        "depth_backend": depth_backend,
+                        "foa_norm": foa_norm},
                 daemon=True
             )
             t.start()

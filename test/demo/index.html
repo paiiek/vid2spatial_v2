@@ -285,7 +285,11 @@
           <input type="checkbox" id="render-binaural" checked disabled> <span style="font-size:0.9em;">Binaural stereo <span style="color:#888; font-size:0.8em;">(always)</span></span>
         </label>
         <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
-          <input type="checkbox" id="render-foa"> <span style="font-size:0.9em;">FOA 4ch <span style="color:#888; font-size:0.8em;">(ACN order W/Y/Z/X, N3D &minus;3 dB &mdash; not SN3D, see docs/ISSUES.md I12)</span></span>
+          <input type="checkbox" id="render-foa"> <span style="font-size:0.9em;">FOA 4ch <span style="color:#888; font-size:0.8em;">(ACN order W/Y/Z/X)</span></span>
+          <select id="foa-norm" style="background:#16213e; border:1px solid #444; color:#eee; font-size:0.78em; padding:3px 6px; border-radius:4px; margin-left:6px;">
+            <option value="legacy" selected>legacy (ACN/N3D &minus;3 dB)</option>
+            <option value="sn3d">sn3d (true AmbiX)</option>
+          </select>
         </label>
       </div>
 
@@ -319,6 +323,14 @@
         <option value="none" selected>none &mdash; fixed distance, fast, no download</option>
         <option value="midas">MiDaS &mdash; per-frame depth; FIRST RUN DOWNLOADS ~1.3 GB</option>
       </select>
+      <div style="color:#888; font-size:0.78em; margin-top:4px;">
+        FOA norm: <b>legacy</b> is what this repo has always written &mdash; ACN
+        channel order but N3D scaled by 1/&radic;2, <i>not</i> the AmbiX SN3D it
+        used to be labelled (measured X/W = 1.7321 = &radic;3 on-axis; see
+        docs/ISSUES.md I12). Pick <b>sn3d</b> if your decoder expects real AmbiX.
+        Demo renders are normalised to &minus;1 dBFS for listening; the library
+        default applies no make-up gain (docs/ISSUES.md I16).
+      </div>
       <div style="color:#888; font-size:0.78em; margin-top:4px;">
         &ldquo;none&rdquo; holds the source at a constant distance, so azimuth and
         elevation still track but distance does not. MiDaS took 12 min on a
@@ -995,6 +1007,7 @@ function runPipeline() {
       mode: mode,
       render_foa: renderFoa,
       depth_backend: depthBackend,
+      foa_norm: document.getElementById('foa-norm').value,
     })
   })
   .then(r => r.json())
@@ -1112,9 +1125,11 @@ function drawTrajectory(url) {
     ctx.fillText('0', 2, Y(0) + 4);
     ctx.fillText('-' + lim.toFixed(0), 2, cv.height - 4);
     const f = x => x.toFixed(2);
+    const rn = t.render || {};
     sum.textContent = fr.length + ' frames @ ' + (t.fps || 30) + ' fps  |  '
       + 'az ' + f(Math.min(...az)) + '..' + f(Math.max(...az)) + ' deg  |  '
-      + 'dist ' + f(Math.min(...di)) + '..' + f(Math.max(...di)) + ' m';
+      + 'dist ' + f(Math.min(...di)) + '..' + f(Math.max(...di)) + ' m'
+      + (rn.foa_norm ? '  |  FOA ' + rn.foa_norm : '');
   }).catch(e => { sum.textContent = 'could not load trajectory: ' + e; });
 }
 

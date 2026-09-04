@@ -70,8 +70,7 @@ Forward pass (Kalman) + Backward pass (RTS) → 인과 lag 없음
 
 **결과:**
 - ~~Az MAE 기준: 0.37° (합성 GT 15 시퀀스)~~ **REMOVED 2026-09-04**: 이 저장소의 어떤 파일도 이 수치를 생성하지 않으며 합성 GT 15 시퀀스도 존재하지 않음. 측정된 값은 22개 LaSOT 클립 AzMAE 1.36° (`docs/ismar_final/QUANT_EVAL_20260304.md`) 이며, 그 지표 자체의 순환성은 `docs/ISSUES.md` I4 참조
-- Px Error: 4.7px
-- d_rel jitter: dist_m 기반 0.008~0.013 (V1 대비 개선)
+- ~~Px Error: 4.7px~~ / ~~d_rel jitter: dist_m 기반 0.008~0.013~~ **REMOVED 2026-09-04**: 위 0.37° 와 같은 이유로 철회. 저장소의 어떤 산출물도 이 두 수치를 재현하지 못한다 (가장 가까운 `archive/yw_sam2_eval/results.json` 은 22 클립에서 `d_rel_jitter` 0.0000~0.0094, `center_err_px` 약 75px 로 자릿수가 다르다)
 
 ### C3b. 학습 기반 end-to-end mono→binaural 은 mono 하한을 넘지 못한다 (음성 결과)
 
@@ -93,6 +92,8 @@ mono 하한을 넘는 클립은 **25%** 뿐이고, ILD 상관은 **0.023** 이�
 뒷받침하는 것은 "학습 end-to-end 대신 결정론적 기하 파이프라인" 이라는 설계
 선택이지, 성능 배수가 아니다.
 출처: `test/full_eval/E2E_COMPARISON.json` (`test/run_e2e_comparison.py`).
+재실행에는 2.5D Visual Sound 사전학습 체크포인트가 필요하며 저장소에는 없다
+(`*.pth` gitignore). 커밋된 JSON 이 그 실행의 기록이다.
 동일 harness 상 우리 binaural 의 ITD-inversion floor 는 7.27°.
 
 ### C3c. 안정화 ablation — 정확도 손실 없이 jitter 40배 감소
@@ -106,7 +107,8 @@ mono 하한을 넘는 클립은 **25%** 뿐이고, ILD 상관은 **0.023** 이�
 | Elevation jitter | 342 | 8.1 | 42× 감소 |
 | AzMAE | 1.3641° | 1.3669° | +0.0028° |
 
-출처: `test/full_eval/STABILIZATION_PROXY_ABLATION.json`. AzMAE 열은
+출처: `test/full_eval/STABILIZATION_PROXY_ABLATION.json`
+(`test/run_stabilization_and_proxy_ablation.py`). AzMAE 열은
 `docs/ISSUES.md` I4 의 순환성 주의가 그대로 적용되지만, jitter/jerk 는 출력
 궤적 자체의 성질이므로 해당되지 않는다.
 

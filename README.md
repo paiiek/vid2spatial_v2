@@ -74,7 +74,10 @@ in a room, LaSOT is visual tracking. What the result supports is the choice of a
 deterministic geometric pipeline over a learned end-to-end one, not a claim that
 this system is 14x better. Source: `test/full_eval/E2E_COMPARISON.json`,
 produced by `test/run_e2e_comparison.py`; our own binaural ITD-inversion floor
-on the same harness is 7.27° (`BINAURAL_AZ_INVERSION.json`).
+on the same harness is 7.27° (`BINAURAL_AZ_INVERSION.json`, produced by
+`test/run_binaural_az_inversion.py`). Re-running the comparison needs the
+pretrained 2.5D Visual Sound checkpoint, which is not in the repo (`*.pth` is
+gitignored); the committed JSON is the record of the run.
 
 ### Trajectory stabilisation is nearly free
 
@@ -89,7 +92,8 @@ Turning the stabiliser on (80 ms angle smoothing, d_rel attack 0.7 s / release
 | AzMAE | 1.3641° | 1.3669° | +0.0028° |
 
 Four decimal places of accuracy buy two orders of magnitude of smoothness.
-Source: `test/full_eval/STABILIZATION_PROXY_ABLATION.json`. The AzMAE column
+Source: `test/full_eval/STABILIZATION_PROXY_ABLATION.json`, produced by
+`test/run_stabilization_and_proxy_ablation.py`. The AzMAE column
 inherits the circularity caveat above; the jitter and jerk columns do not,
 since they are properties of the output trajectory alone.
 

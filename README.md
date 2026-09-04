@@ -23,8 +23,8 @@ Video / Sketch
                               │
               ┌───────────────┼───────────────┐
               ▼               ▼               ▼
-         Binaural          FOA AmbiX       OSC UDP
-       (KEMAR SOFA)      (ACN/SN3D)    (any DAW/engine)
+         Binaural          FOA ACN         OSC UDP
+       (KEMAR SOFA)   (N3D/sqrt2, I12)  (any DAW/engine)
 ```
 
 ### Key properties
@@ -339,6 +339,14 @@ per-source boxes.
 
 - Pipeline: `az = atan2(x, z)` → **right of image = az > 0**
 - SOFA/AmbiX standard: left = az > 0 (counterclockwise from front)
+- FOA channel order is ACN `[W, Y, Z, X]`. The default normalisation is
+  **not** SN3D: `--foa-norm legacy` (the default) writes ACN/N3D scaled by
+  `1/sqrt(2)`, measured `X/W = 1.7321 = sqrt(3)` on axis. `--foa-norm sn3d`
+  writes true AmbiX (`X/W = 1.0`). See `docs/ISSUES.md` I12
+- Rendered level: the distance law can leave a correct render near
+  -64 dBFS, below the BS.1770 gate. `--peak-dbfs -1` normalises the output;
+  it is off by default so existing numbers and stimuli do not move. The web
+  demo turns it on. See `docs/ISSUES.md` I16
 - FOA encoding applies `az_SOFA = −az_pipeline`
 - Elevation: up = positive (image-y-down corrected in `vision.py`)
 

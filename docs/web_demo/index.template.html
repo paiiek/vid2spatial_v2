@@ -189,7 +189,7 @@ footer .wrap{display:flex;flex-direction:column;gap:8px}
       <div class="arr">→</div>
       <div class="out">
         <div class="box"><b>Binaural</b><span>KEMAR HRTF</span></div>
-        <div class="box"><b>FOA AmbiX</b><span>ACN / SN3D</span></div>
+        <div class="box"><b>FOA</b><span>ACN / N3D&divide;&radic;2</span></div>
         <div class="box"><b>OSC</b><span>any DAW or engine</span></div>
       </div>
     </div>
@@ -413,7 +413,7 @@ binaural = direct_binaural_sofa(audio_mono, sr=48000,
 OSCSpatialSender("127.0.0.1", 9000).stream_trajectory(traj.frames, fps=30)</code></pre>
       </div>
     </div>
-    <p class="note" style="margin-top:14px">Coordinate convention: pipeline azimuth is <code>atan2(x, z)</code>, right of image positive; the FOA encoder flips sign to the SOFA / AmbiX convention. KEMAR SOFA file is downloaded separately.</p>
+    <p class="note" style="margin-top:14px">Coordinate convention: pipeline azimuth is <code>atan2(x, z)</code>, right of image positive; the FOA encoder flips sign to the SOFA / AmbiX convention. Channel order is ACN [W, Y, Z, X]; the default normalisation is ACN/N3D scaled by 1/&radic;2, not SN3D (docs/ISSUES.md I12). KEMAR SOFA file is downloaded separately.</p>
   </div>
 </section>
 

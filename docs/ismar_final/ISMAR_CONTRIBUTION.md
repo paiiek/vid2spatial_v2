@@ -24,6 +24,14 @@
 **본 시스템의 차별점:**
 - **입력**: 일반 RGB 비디오 + 모노 오디오 (전문 장비 불필요)
 - **출력**: FOA (First Order Ambisonics) + binaural (headphone-ready)
+  - FOA 채널 순서는 ACN `[W, Y, Z, X]`이며, 기본 정규화는 **SN3D가 아니다**:
+    `foa_norm="legacy"`(기본값)는 ACN/N3D에 `1/sqrt(2)`를 곱한 것으로,
+    축 위에서 `X/W = 1.7321 = sqrt(3)`으로 측정된다. 진짜 AmbiX가 필요하면
+    `foa_norm="sn3d"`(`X/W = 1.0`)를 쓴다. 논문/청취실험 자극은 모두
+    `legacy`로 생성되었다. 상세는 `docs/ISSUES.md` I12.
+  - 렌더 레벨: 기본 렌더는 make-up gain을 적용하지 않으며, 거리 감쇠 때문에
+    2초 클립에서 피크 -63.77 dBFS(BS.1770 게이트 미만, LUFS 측정 불가)까지
+    내려갈 수 있다. `--peak-dbfs -1`은 옵트인이다. `docs/ISSUES.md` I16.
 - **수동 개입**: 0 (완전 자동)
 - **추가 센서**: 불필요 (IMU, depth camera, stereo cam 모두 불필요)
 

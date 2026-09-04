@@ -214,29 +214,66 @@ The gate reaches JSON exports in full. The CSV export carries only the scalar
 
 ---
 
-## I12 — The exported FOA is ACN/N3D, not the AmbiX (ACN/SN3D) it is labelled
+## I12 — The FOA default is ACN/N3D at -3 dB, not the AmbiX it was labelled
 
-`foa_render.dir_to_foa_acn_sn3d_gains` is named for SN3D and its docstring says
-AmbiX (ACN/SN3D), but it computes
+**Measured.** Synthetic single source, `gain_mode="none"`, steady-state RMS
+ratios out of `render_foa_from_trajectory` (the numbers a user's file has):
 
-    W = 1/sqrt(2),  X = sqrt(3/2)*x,  Y = sqrt(3/2)*y,  Z = sqrt(3/2)*z
+| direction | X/W | Y/W | Z/W | sqrt(X²+Y²+Z²)/W |
+|---|---|---|---|---|
+| az 0, el 0   | 1.7321 | 0.0000 | 0.0000 | 1.7321 |
+| az 90, el 0  | 0.1173 | 1.7281 | 0.0000 | 1.7321 |
+| az 45, el 0  | 1.2305 | 1.2190 | 0.0000 | 1.7321 |
+| el 90        | 0.1173 | 0.0000 | 1.7281 | 1.7321 |
 
-which is ACN/**N3D** scaled by `1/sqrt(2)`, not SN3D (SN3D is `W = 1`,
-`X = x`). Measured on a demo render of a source near the front
-(az 6.7 deg, el 6.8 deg): channel RMS `X/W = 1.72`, and `sqrt(3) = 1.732`.
-Channel ORDER is correct ACN (`W, Y, Z, X`).
+`sqrt(3) = 1.7321`, `sqrt(3/2) = 1.2247`. The az 90 and el 90 rows miss their
+axis only because the 80 ms angle smoother settles at 86.1 deg; the
+direction-independent invariant `sqrt(X²+Y²+Z²)/W` is `sqrt(3)` exactly, which
+is what pins the normalisation.
 
-Consequence: a decoder that takes the file at its word and applies the SN3D
-convention renders the source about 4.8 dB over-directional, and the bed sits
-3 dB low overall. The repo's own decoders (`foa_to_stereo`, `foa_to_binaural`)
-multiply the first order by `sqrt(3)` on the way in, i.e. they also assume SN3D
-input, so the internal round trip applies the factor twice.
+**The formula.** Channel order is ACN `[W, Y, Z, X]` (correct). With
+`x = cos(az)cos(el)`, `y = sin(az)cos(el)`, `z = sin(el)`:
 
-**Not fixed here.** Correcting the encoder changes every rendered sample and
-would break the byte-stability golden (`test/test_geometry_render.py`), which
-is the point of that gate. The label is corrected in the web UI and this entry
-records the measurement; the normalisation change needs its own lane, with the
-golden regenerated deliberately.
+```
+legacy (default)   W = 1/sqrt(2)   X = sqrt(3/2)*x   Y = sqrt(3/2)*y   Z = sqrt(3/2)*z
+sn3d  (opt-in)     W = 1           X = x             Y = y             Z = z
+```
+
+So `legacy` is ACN/**N3D** scaled by `1/sqrt(2)` — not SN3D, which is what the
+function name `dir_to_foa_acn_sn3d_gains`, its docstring, the package
+docstring, the README diagram, the web demo and the UI checkbox all claimed.
+A decoder that believes the label renders the source **4.77 dB
+over-directional** and 3 dB low overall. The repo's own decoders
+(`foa_to_stereo`, `foa_to_binaural`) multiply the first order by `sqrt(3)` on
+input, i.e. they also assume SN3D, so the internal round trip applies the
+factor twice.
+
+**Now.** Every label states what is produced, and `foa_norm` selects it:
+`SpatialConfig.foa_norm`, `--foa-norm {legacy,sn3d}` (`config.add_render_cli_args`),
+`encode_mono_to_foa(..., norm=)`, `render_foa_from_trajectory(..., foa_norm=)`,
+and a picker in the web demo. The trajectory JSON records what was used under
+`render.foa_norm` / `render.foa_norm_detail`, so a WAV is never separated from
+its convention again. `sn3d` measures `X/W = 1.0000` on axis and an invariant
+of `1.0000` in every direction.
+
+**Why the default cannot flip yet.** `legacy` is not a bug that can simply be
+corrected; it is the convention every existing artefact was produced under:
+
+- the byte-stability golden (`test/test_geometry_render.py`,
+  `test/make_render_golden.py`) digests the encoder output, and flipping the
+  default changes every sample;
+- the listening-test stimuli (`test/listening_test_v3/`, `render_listening_test_v3.py`)
+  and the MOS results reported in `docs/ismar_final/` were rendered with it,
+  so a flip silently invalidates the comparison between old and new stimuli;
+- the published azimuth/elevation numbers were computed through decoders that
+  assume SN3D input, and the double-`sqrt(3)` cancels part of the error.
+
+Flipping would require, in one deliberate lane: regenerate the render golden,
+re-render and re-run the listening test (or state that the stimuli are on the
+old convention), re-derive any number that passed through `foa_to_stereo` or
+`foa_to_binaural`, and drop the compensating `sqrt(3)` in those decoders so the
+round trip stops applying it twice. Until then the honest move is the one taken
+here: keep the bytes, fix the words, and offer the correct encoder as an option.
 
 ---
 
@@ -316,13 +353,57 @@ az -21.01 deg, two distinct automation files, one FOA.
 
 ---
 
-## I16 — The demo's rendered level is very low
+## I16 — A correct render can be inaudible (-63.77 dBFS), and nothing adds make-up gain
 
-With the distance fallback corrected (I14) a source sits at 5.25 m, and the
-default distance-gain law puts the demo's binaural output at peak 0.00065
-(about -64 dBFS) for a stem that peaks near 0.02 in the file. It is correct per
-the gain law and effectively inaudible without normalising. The web demo offers
-no output-gain control and no normalisation, so "listen with headphones" gives
-silence on a normal system volume. Changing the law would move every rendered
-sample and is blocked by the byte-stability golden, so this is recorded, not
-fixed.
+**Measured** on the demo's own 2 s LaSOT clip against a spatamb stem:
+
+| stage | peak | peak dBFS |
+|---|---|---|
+| source stem, whole file | 0.153058 | -16.30 |
+| the 2 s the video covers | 0.006317 | -43.99 |
+| FOA after the distance law | 0.000787 | -62.08 |
+| binaural | 0.000648 | -63.77 |
+
+Integrated loudness of the finished binaural is **-inf LUFS**: below the
+BS.1770 absolute gate, i.e. formally silent to a loudness meter.
+
+**Two causes, neither a missing fader.**
+
+1. *Content in the trimmed window.* The stem opens near-silent, so the two
+   seconds the video covers sit 27.7 dB below the file's own peak. This became
+   visible only once the render was trimmed to the video (I15's sibling fix);
+   before that the render ran over the whole 62 s stem and picked up the loud
+   passage, hiding the problem.
+2. *The distance law.* `apply_distance_gain_lpf` maps `d_rel` onto a virtual
+   inverse-square range `r = 1..8 m` and raises it to `gain_k`. At the clip's
+   `d_rel = 0.79` (5.25 m) that is **-19.72 dB measured on unity**, applied on
+   top of source audio nobody normalised. A further -18.1 dB lands between the
+   trimmed source and the FOA file.
+
+Every stage is doing exactly what it documents. There is simply no make-up gain
+anywhere in the chain, and the reference level is implicit rather than stated.
+
+**Now.** Opt-in output normalisation: `SpatialConfig.peak_dbfs`,
+`--peak-dbfs` (`config.add_render_cli_args`), and `peak_dbfs=` on both
+`render_foa_from_trajectory` and `render_binaural_from_trajectory`. Off by
+default, because make-up gain by default would move every published number and
+break the byte-stability golden. The web demo sets `-1.0` (`DEMO_PEAK_DBFS`)
+because it exists to be listened to; stimulus generation must leave it off.
+
+A/B on the same clip:
+
+| setting | file | peak dBFS | LUFS-I |
+|---|---|---|---|
+| default (`peak_dbfs=None`) | binaural | -63.77 | -inf |
+| default | FOA | -62.08 | -inf |
+| `--peak-dbfs -1` | binaural | -1.00 | -16.44 |
+| `--peak-dbfs -1` | FOA | -1.00 | -16.84 |
+
+Normalisation is applied to the FOA bed before stereo and binaural are decoded
+from it, so relative levels between the outputs are unchanged.
+
+**Still open.** The real fix is a stated reference level: a documented source
+loudness target (say -23 LUFS in) and a `d_ref_m` at which the chain is unity,
+so a render is predictable without a normaliser. That is a render-default
+change and belongs with the I12 flip, in a lane that regenerates the golden.
+

@@ -31,6 +31,13 @@ Row schema (one row per tracked frame):
                         legacy bundle (--legacy-spatial) still lets the bridge
                         re-normalise metres with its own constant.
     confidence   float  tracker confidence (0-1), 1.0 if absent
+    av_confidence float audio-visual correlation score for the WHOLE clip,
+                        repeated on every row (it is one number per pairing,
+                        not per frame). Empty when it was never computed.
+                        Near 0 means the pairing is UNVERIFIED -- see
+                        av_correlation and docs/ISSUES.md I11. The CSV carries
+                        only this scalar; the warning text and the diagnostic
+                        fields (pearson, lag_frames, r_null) are JSON-only.
 
 CSV: header row + rows above.  JSON: {"format": "vid2spatial-automation",
 "version": 1, "fps", "object_id", "distance_max_m", "frames": [row, ...]}.
@@ -53,6 +60,10 @@ COLUMNS: Sequence[str] = (
     "az_adm_deg", "el_adm_deg", "dist_adm",
     "confidence",
 )
+
+# One per clip, not per frame, so it is appended to every CSV row rather than
+# produced by frame_to_row. Kept out of COLUMNS, which is the per-frame schema.
+AV_COLUMN = "av_confidence"
 
 # Mirrors foa_render.apply_distance_gain_lpf (hardcoded ISL branch).
 _R_NEAR = 1.0
@@ -127,15 +138,31 @@ def export_trajectory_csv(
     fps: float = 30.0,
     object_id: int = 1,
     distance_max_m: float = 10.0,
+    av_confidence: Optional[Union[Dict, float]] = None,
 ) -> Path:
-    """Write the trajectory as CSV (header = COLUMNS). Returns the path."""
+    """Write the trajectory as CSV (header = COLUMNS + av_confidence).
+
+    ``av_confidence`` is one number for the clip, so it repeats on every row.
+    Until 2026-09-04 the CSV dropped it entirely, which silently discarded the
+    audio-visual gate for anyone exporting to a DAW rather than to JSON.
+    """
     rows = trajectory_to_rows(_frames_of(trajectory), fps, object_id, distance_max_m)
+    if av_confidence is None and isinstance(trajectory, dict):
+        av_confidence = trajectory.get("av_confidence")
+    score = ""
+    if isinstance(av_confidence, dict):
+        v = av_confidence.get("av_confidence")
+        score = f"{float(v):.6f}" if isinstance(v, (int, float)) else ""
+    elif isinstance(av_confidence, (int, float)):
+        score = f"{float(av_confidence):.6f}"
     path = Path(path)
     with open(path, "w", newline="") as fh:
-        w = csv.DictWriter(fh, fieldnames=list(COLUMNS))
+        w = csv.DictWriter(fh, fieldnames=list(COLUMNS) + [AV_COLUMN])
         w.writeheader()
         for r in rows:
-            w.writerow({k: (f"{v:.6f}" if isinstance(v, float) else v) for k, v in r.items()})
+            row = {k: (f"{v:.6f}" if isinstance(v, float) else v) for k, v in r.items()}
+            row[AV_COLUMN] = score
+            w.writerow(row)
     return path
 
 
@@ -196,7 +223,8 @@ def read_automation_csv(path: Union[str, Path]) -> List[Dict[str, float]]:
     with open(path, newline="") as fh:
         for r in csv.DictReader(fh):
             out.append({
-                k: (int(v) if k in ("frame", "object_id") else float(v))
+                k: (int(v) if k in ("frame", "object_id")
+                    else (None if v == "" else float(v)))
                 for k, v in r.items()
             })
     return out

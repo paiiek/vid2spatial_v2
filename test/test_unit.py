@@ -767,11 +767,30 @@ class TestTrajectoryExport(unittest.TestCase):
         out = export_trajectory({"frames": self.frames}, Path(self.tmp.name) / "a.csv", fps=25.0)
         with open(out) as fh:
             header = fh.readline().strip().split(",")
-        self.assertEqual(header, list(COLUMNS))
+        self.assertEqual(header, list(COLUMNS) + ["av_confidence"])
         rows = read_automation_csv(out)
         self.assertEqual([r["frame"] for r in rows], [0, 2, 4])
         self.assertAlmostEqual(rows[1]["t_s"], 2 / 25.0, places=5)
         self.assertAlmostEqual(rows[1]["az_adm_deg"], 45.0, places=5)
+
+    def test_csv_carries_av_confidence(self):
+        """The gate must survive the CSV route, not only the JSON one."""
+        from vid2spatial_pkg.trajectory_export import (
+            export_trajectory, read_automation_csv)
+        traj = {"frames": self.frames,
+                "av_confidence": {"av_confidence": 0.42, "warning": None}}
+        out = export_trajectory(traj, Path(self.tmp.name) / "c.csv", fps=25.0)
+        rows = read_automation_csv(out)
+        self.assertEqual(len(rows), 3)
+        for r in rows:                      # one clip-level number, every row
+            self.assertAlmostEqual(r["av_confidence"], 0.42, places=5)
+
+    def test_csv_av_confidence_is_empty_when_unscored(self):
+        from vid2spatial_pkg.trajectory_export import (
+            export_trajectory, read_automation_csv)
+        out = export_trajectory({"frames": self.frames},
+                                Path(self.tmp.name) / "d.csv", fps=25.0)
+        self.assertIsNone(read_automation_csv(out)[0]["av_confidence"])
 
     def test_json_shape(self):
         import json

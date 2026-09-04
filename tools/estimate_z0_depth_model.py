@@ -169,11 +169,27 @@ def main(argv=None) -> int:
     torch.set_num_threads(max(1, a.threads))
 
     cache_path = Path(a.cache) if a.cache else Path(a.out).with_suffix(".cache.json")
+
+    def flush_cache():
+        """Atomic: a kill during the write must not destroy the checkpoint."""
+        tmp = cache_path.with_name(cache_path.name + ".part")
+        tmp.write_text(json.dumps({"disp": disp, "gt": gt}))
+        tmp.replace(cache_path)
+
     disp, gt = {}, {}
     if cache_path.exists():
-        c = json.loads(cache_path.read_text())
-        disp, gt = c.get("disp", {}), c.get("gt", {})
-        print(f"resuming from {cache_path}: {len(disp)} tracks already done", flush=True)
+        try:
+            c = json.loads(cache_path.read_text())
+            disp, gt = c.get("disp", {}), c.get("gt", {})
+            print(f"resuming from {cache_path}: {len(disp)} tracks already done",
+                  flush=True)
+        except (json.JSONDecodeError, OSError) as e:
+            # Truncated by an earlier non-atomic write. Losing the cache costs
+            # compute; silently trusting a half-file would corrupt the numbers.
+            bad = cache_path.with_name(cache_path.name + ".corrupt")
+            cache_path.replace(bad)
+            print(f"[warn] cache {cache_path} unreadable ({e}); moved to {bad} "
+                  f"and starting from scratch", flush=True)
 
     model = build_model(a.device)
     todo = [n for n in have if any(k not in disp for k, _ in by_img[n])]
@@ -190,9 +206,9 @@ def main(argv=None) -> int:
                 gt[k] = float(r["z"])
         del d, img
         if (i + 1) % 10 == 0:
-            cache_path.write_text(json.dumps({"disp": disp, "gt": gt}))
+            flush_cache()
             print(f"  {i+1}/{len(todo)} frames ({len(disp)} tracks)", flush=True)
-    cache_path.write_text(json.dumps({"disp": disp, "gt": gt}))
+    flush_cache()
 
     keys = sorted(disp)
     dd = np.array([disp[k] for k in keys])
@@ -222,6 +238,13 @@ def main(argv=None) -> int:
                     "against the GT once, the standard affine-invariant protocol. "
                     "It replaces a per-track oracle z0 with two dataset-wide numbers. "
                     "This is a two-parameter scale-AND-shift fit, NOT median scaling.",
+        },
+        "boxes": {
+            "source": "KITTI ground-truth 2D boxes",
+            "note": "The depth crop and the proxy area both come from the GT box, "
+                    "not from a tracker. A deployed run reads a TRACKED box, so "
+                    "box error is absent from these numbers: this is a second "
+                    "source of optimism alongside the GT-fitted affine.",
         },
         "alignment_alternative_median_scale": {
             "method": "median-scale on relative depth (scale only, no shift)",

@@ -36,6 +36,7 @@ import zlib
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from typing import Optional
 
 URL = "https://s3.eu-central-1.amazonaws.com/avg-kitti/data_tracking_image_2.zip"
 
@@ -103,26 +104,56 @@ def wanted_frames(gt_path: Path, max_frames: int):
     return [k for k, _ in counts.most_common(max_frames)]
 
 
-def fetch(url: str, zi: zipfile.ZipInfo, out: Path) -> bool:
-    # local header is 30 bytes + name + extra; grab a slab covering header+data
-    start = zi.header_offset
-    end = start + 30 + len(zi.filename) + 256 + zi.compress_size
+_EXTRA_GUESS = 256   # slab allowance for the local extra field, usually enough
+
+
+def _ranged_read(url: str, start: int, end: int) -> Optional[bytes]:
+    """Bytes [start, end] inclusive, retried. None when the fetch failed."""
     req = urllib.request.Request(url, headers={"Range": f"bytes={start}-{end}"})
-    buf = None
     for _ in range(4):
         try:
             with urllib.request.urlopen(req, timeout=180) as r:
-                buf = r.read()
-            break
+                return r.read()
         except Exception:
             time.sleep(2)
-    if buf is None:
+    return None
+
+
+def fetch(url: str, zi: zipfile.ZipInfo, out: Path) -> bool:
+    """One member, verified against its CRC and written atomically.
+
+    The local header's extra field can be longer than the central directory's,
+    so the slab allowance is a guess. When the guess is short the member data
+    is TRUNCATED, and a stored (uncompressed) member would then be written out
+    as a valid-looking but incomplete PNG with no error anywhere. So the real
+    lengths are read back from the local header and the remainder re-fetched,
+    and every member is checked against zi.CRC before it is kept.
+    """
+    start = zi.header_offset
+    end = start + 30 + len(zi.filename) + _EXTRA_GUESS + zi.compress_size
+    buf = _ranged_read(url, start, end)
+    if buf is None or len(buf) < 30:
         return False
     nlen, elen = struct.unpack("<HH", buf[26:30])
     off = 30 + nlen + elen
     data = buf[off:off + zi.compress_size]
-    raw = data if zi.compress_type == 0 else zlib.decompress(data, -15)
-    out.write_bytes(raw)
+    if len(data) < zi.compress_size:          # the extra field overran the guess
+        rest = _ranged_read(url, start + off + len(data),
+                            start + off + zi.compress_size - 1)
+        if rest is None:
+            return False
+        data += rest
+    if len(data) != zi.compress_size:
+        return False
+    try:
+        raw = data if zi.compress_type == 0 else zlib.decompress(data, -15)
+    except zlib.error:
+        return False                          # never let one member kill the run
+    if zi.CRC and (zlib.crc32(raw) & 0xFFFFFFFF) != zi.CRC:
+        return False
+    tmp = out.with_name(out.name + ".part")
+    tmp.write_bytes(raw)
+    tmp.replace(out)                          # atomic: readers see all or nothing
     return True
 
 
@@ -151,10 +182,14 @@ def main(argv=None) -> int:
     have = sum(f.stat().st_size for f in out.glob("*.png"))
     for seq, frame in sel:
         dst = out / f"{seq}_{frame:06d}.png"
-        if dst.exists() and dst.stat().st_size > 1000:
-            continue
         zi = info.get(f"training/image_02/{seq}/{frame:06d}.png")
         if zi is None:
+            continue
+        # Idempotent on SIZE, not on "bigger than a threshold": a partial write
+        # from an interrupted run is over 1000 bytes too, and would otherwise be
+        # skipped forever and fed to the estimator as good data. Writes are
+        # atomic now, so a size match means the member is complete.
+        if dst.exists() and dst.stat().st_size == zi.file_size:
             continue
         if have + zi.file_size > budget:
             print(f"[stop] disk budget {a.max_mb:.0f} MB reached at {len(jobs)} frames")

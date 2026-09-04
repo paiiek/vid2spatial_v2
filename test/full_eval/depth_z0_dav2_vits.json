@@ -8,6 +8,10 @@
     "n_free_parameters": 2,
     "note": "NOT metric depth from the model; a global affine fitted against the GT once, the standard affine-invariant protocol. It replaces a per-track oracle z0 with two dataset-wide numbers. This is a two-parameter scale-AND-shift fit, NOT median scaling."
   },
+  "boxes": {
+    "source": "KITTI ground-truth 2D boxes",
+    "note": "The depth crop and the proxy area both come from the GT box, not from a tracker. A deployed run reads a TRACKED box, so box error is absent from these numbers: this is a second source of optimism alongside the GT-fitted affine."
+  },
   "alignment_alternative_median_scale": {
     "method": "median-scale on relative depth (scale only, no shift)",
     "form": "z = s / disparity, s = median(z_gt) / median(1/disparity)",

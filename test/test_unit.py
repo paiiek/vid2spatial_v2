@@ -1737,3 +1737,87 @@ class TestAudioIOFallback(unittest.TestCase):
         self.assertEqual(len(y), len(ref))
         # different resamplers; agreement is on the signal, not bit-exact
         self.assertLess(float(np.mean(np.abs(y - ref))), 0.02)
+
+
+class TestKittiFrameFetch(unittest.TestCase):
+    """Ranged fetch out of the remote KITTI zip must never keep a short member."""
+
+    @staticmethod
+    def _tool():
+        import importlib.util
+        root = pathlib.Path(__file__).resolve().parent.parent
+        spec = importlib.util.spec_from_file_location(
+            "fetch_kitti_frames", root / "tools" / "fetch_kitti_frames.py")
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+
+    def _zip_bytes(self, payload, extra_len=0, compress=False):
+        """A one-member zip, optionally with a long LOCAL extra field."""
+        import io as _io
+        import zipfile as _zf
+        buf = _io.BytesIO()
+        comp = _zf.ZIP_DEFLATED if compress else _zf.ZIP_STORED
+        with _zf.ZipFile(buf, "w", compression=comp) as z:
+            zi = _zf.ZipInfo("training/image_02/0000/000000.png")
+            zi.compress_type = comp
+            if extra_len:
+                zi.extra = b"\x99\x99" + extra_len.to_bytes(2, "little") + b"\0" * extra_len
+            z.writestr(zi, payload)
+        return buf.getvalue()
+
+    def _fetch_into(self, m, blob, dst, corrupt_crc=False):
+        import zipfile as _zf
+        import io as _io
+        zi = _zf.ZipFile(_io.BytesIO(blob)).infolist()[0]
+        if corrupt_crc:
+            zi.CRC ^= 0xFFFF
+        m._ranged_read = lambda url, a, b: blob[a:b + 1]
+        return m.fetch("http://x", zi, dst), zi
+
+    def test_long_local_extra_field_is_refetched_not_truncated(self):
+        """The 256-byte slab allowance is a guess; a long extra field breaks it."""
+        import tempfile
+        m = self._tool()
+        payload = bytes(range(256)) * 40           # 10240 stored bytes
+        blob = self._zip_bytes(payload, extra_len=600)
+        dst = pathlib.Path(tempfile.mkdtemp()) / "f.png"
+        ok, _ = self._fetch_into(m, blob, dst)
+        self.assertTrue(ok)
+        self.assertEqual(dst.read_bytes(), payload)
+
+    def test_crc_mismatch_is_rejected(self):
+        import tempfile
+        m = self._tool()
+        blob = self._zip_bytes(b"x" * 4096)
+        dst = pathlib.Path(tempfile.mkdtemp()) / "f.png"
+        ok, _ = self._fetch_into(m, blob, dst, corrupt_crc=True)
+        self.assertFalse(ok)
+        self.assertFalse(dst.exists(), "a CRC-failing member must not be kept")
+
+    def test_deflated_member_roundtrips_and_leaves_no_part_file(self):
+        import tempfile
+        m = self._tool()
+        payload = b"".join(bytes([i % 251]) for i in range(20000))
+        blob = self._zip_bytes(payload, compress=True)
+        d = pathlib.Path(tempfile.mkdtemp())
+        ok, _ = self._fetch_into(m, blob, d / "f.png")
+        self.assertTrue(ok)
+        self.assertEqual((d / "f.png").read_bytes(), payload)
+        self.assertEqual(list(d.glob("*.part")), [])
+
+    def test_corrupt_deflate_stream_returns_false_instead_of_raising(self):
+        """One bad member used to kill the whole ThreadPoolExecutor.map run."""
+        import tempfile
+        m = self._tool()
+        import io as _io
+        import zipfile as _zf
+        clean = self._zip_bytes(b"y" * 8000, compress=True)
+        zi = _zf.ZipFile(_io.BytesIO(clean)).infolist()[0]
+        blob = bytearray(clean)
+        start = zi.header_offset + 30 + len(zi.filename) + len(zi.extra)
+        blob[start + 4:start + 40] = b"\0" * 36     # smash the deflate stream only
+        dst = pathlib.Path(tempfile.mkdtemp()) / "f.png"
+        m._ranged_read = lambda url, a, b: bytes(blob)[a:b + 1]
+        self.assertFalse(m.fetch("http://x", zi, dst))
+        self.assertFalse(dst.exists())

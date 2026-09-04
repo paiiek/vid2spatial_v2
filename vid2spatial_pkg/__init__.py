@@ -10,7 +10,10 @@ Modules
 
 Conventions
 - Angles: azimuth/elevation in radians unless specified
-- FOA format: AmbiX (ACN/SN3D) channel order [W, Y, Z, X]
+- FOA format: ACN channel order [W, Y, Z, X]. Default normalisation is
+  "legacy" = ACN/N3D scaled by 1/sqrt(2), NOT the AmbiX SN3D this line
+  used to claim (measured X/W = sqrt(3) on axis). Pass foa_norm="sn3d"
+  for true AmbiX. See docs/ISSUES.md I12.
 """
 
 __all__ = [

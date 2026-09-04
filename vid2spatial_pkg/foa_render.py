@@ -9,21 +9,58 @@ SQ2 = math.sqrt(2.0)
 SQ3_2 = math.sqrt(3.0 / 2.0)  # SN3D scaling for first order
 
 
-def dir_to_foa_acn_sn3d_gains(az: np.ndarray, el: np.ndarray) -> np.ndarray:
-    """Compute FOA gains in AmbiX (ACN/SN3D) channel order [W, Y, Z, X].
+#: Encoder normalisations. The channel ORDER is ACN ([W, Y, Z, X]) in both.
+#:
+#:   "legacy" -- what this repo has always written, and still the default:
+#:       W = 1/sqrt(2),  X = sqrt(3/2)*x,  Y = sqrt(3/2)*y,  Z = sqrt(3/2)*z
+#:   which is ACN/N3D scaled by 1/sqrt(2), NOT SN3D. Measured end to end on a
+#:   synthetic single source (steady state, `gain_mode="none"`):
+#:       az 0  el 0   X/W = 1.7321   Y/W = 0        Z/W = 0
+#:       az 90 el 0   X/W = 0.1173   Y/W = 1.7281   Z/W = 0
+#:       az 45 el 0   X/W = 1.2305   Y/W = 1.2190   Z/W = 0
+#:       el 90        X/W = 0.1173   Y/W = 0        Z/W = 1.7281
+#:   sqrt(3) = 1.7321 and sqrt(3/2) = 1.2247. The direction-independent
+#:   invariant is sqrt(X^2 + Y^2 + Z^2)/W = sqrt(3) exactly; the az 90 and
+#:   el 90 rows miss their axis only because the 80 ms angle smoother settles
+#:   at 86.1 deg, not because of the normalisation.
+#:
+#:   "sn3d" -- true AmbiX (ACN/SN3D), opt-in:
+#:       W = 1,  X = x,  Y = y,  Z = z
+#:   so sqrt(X^2 + Y^2 + Z^2)/W = 1 for a unit direction.
+#:
+#: The default cannot flip yet: see docs/ISSUES.md I12.
+FOA_NORMS = ("legacy", "sn3d")
+DEFAULT_FOA_NORM = "legacy"
+
+
+def dir_to_foa_acn_sn3d_gains(az: np.ndarray, el: np.ndarray,
+                              norm: str = DEFAULT_FOA_NORM) -> np.ndarray:
+    """FOA gains in ACN channel order [W, Y, Z, X].
+
+    The name says SN3D and has since the first commit, but the default
+    ``norm="legacy"`` is ACN/**N3D** scaled by ``1/sqrt(2)``. Pass
+    ``norm="sn3d"`` for the AmbiX the name promises. See ``FOA_NORMS`` above
+    for the measured ratios and docs/ISSUES.md I12 for why the default stands.
 
     x = cos(az)cos(el), y = sin(az)cos(el), z = sin(el)
-    W = 1/sqrt(2)
-    X = sqrt(3/2)*x, Y = sqrt(3/2)*y, Z = sqrt(3/2)*z
+
     Returned gains: [W, Y, Z, X] with shape [4, T]
     """
+    if norm not in FOA_NORMS:
+        raise ValueError(f"unknown FOA normalisation {norm!r}; "
+                         f"expected one of {FOA_NORMS}")
     x = np.cos(az) * np.cos(el)
     y = np.sin(az) * np.cos(el)
     z = np.sin(el)
-    W = np.full_like(x, 1.0 / SQ2)
-    X = SQ3_2 * x
-    Y = SQ3_2 * y
-    Z = SQ3_2 * z
+    if norm == "sn3d":
+        # AmbiX ACN/SN3D: omni is unity, first order is the direction cosine.
+        W = np.ones_like(x)
+        X, Y, Z = x, y, z
+    else:
+        W = np.full_like(x, 1.0 / SQ2)
+        X = SQ3_2 * x
+        Y = SQ3_2 * y
+        Z = SQ3_2 * z
     return np.stack([W, Y, Z, X], axis=0).astype(np.float32)
 
 
@@ -671,19 +708,54 @@ def apply_timevarying_reverb_foa(foa: np.ndarray, sr: int, wet_curve: np.ndarray
 
 def encode_mono_to_foa(mono: np.ndarray,
                        az_series: np.ndarray,
-                       el_series: np.ndarray) -> np.ndarray:
+                       el_series: np.ndarray,
+                       norm: str = DEFAULT_FOA_NORM) -> np.ndarray:
     """Time-varying FOA encoding of mono signal using per-sample az/el.
-    Returns FOA array [4, T] in AmbiX (ACN/SN3D) [W, Y, Z, X]."""
+
+    Returns FOA array [4, T] in ACN order [W, Y, Z, X]. ``norm`` selects the
+    normalisation: "legacy" (default, ACN/N3D at -3 dB, what this repo has
+    always written) or "sn3d" (true AmbiX). See ``FOA_NORMS``.
+    """
     assert mono.ndim == 1
     T = mono.shape[0]
     assert az_series.shape[0] == T and el_series.shape[0] == T
-    gains = dir_to_foa_acn_sn3d_gains(az_series, el_series)  # [4,T]
+    gains = dir_to_foa_acn_sn3d_gains(az_series, el_series, norm=norm)  # [4,T]
     foa = gains * mono[None, :]
     # peak normalization to avoid clipping
     peak = float(np.max(np.abs(foa)))
     if peak > 1.0:
         foa /= (peak * 1.01)
     return foa.astype(np.float32)
+
+
+
+def _apply_peak_normalisation(y: np.ndarray, peak_dbfs: Optional[float]):
+    """Scale a finished bed so its peak sits at ``peak_dbfs``. Off when None.
+
+    This is make-up gain, not a fix for the level itself. The chain that makes
+    a demo render inaudible, measured end to end on a 2 s LaSOT clip against a
+    spatamb stem (docs/ISSUES.md I16):
+
+        source stem, whole file        -16.30 dBFS peak
+        the 2 s the video covers       -43.99 dBFS   (the stem opens near-silent)
+        after the distance gain law    -62.08 dBFS   (-19.72 dB on unity at
+                                                      d_rel 0.79, i.e. 5.25 m)
+        binaural                       -63.77 dBFS
+
+    So the two causes are the source content in the trimmed window and the
+    inverse-square distance law applied on top of audio nobody normalised.
+    Every stage is doing what it says; nothing applies make-up gain. Returns
+    ``(scaled, gain)`` with ``gain`` 1.0 when normalisation is off or the bed
+    is silent.
+    """
+    if peak_dbfs is None:
+        return y, 1.0
+    peak = float(np.max(np.abs(y))) if y.size else 0.0
+    if peak <= 0.0:
+        return y, 1.0
+    target = 10.0 ** (peak_dbfs / 20.0)
+    gain = target / peak
+    return (y * gain).astype(y.dtype), gain
 
 
 def write_foa_wav(path: str, foa: np.ndarray, sr: int) -> None:
@@ -699,7 +771,9 @@ def write_foa_wav(path: str, foa: np.ndarray, sr: int) -> None:
     sf.write(path, y.T, sr, subtype="FLOAT")
 
 
-def encode_many_to_foa(monolist: List[np.ndarray], az_list: List[np.ndarray], el_list: List[np.ndarray]) -> np.ndarray:
+def encode_many_to_foa(monolist: List[np.ndarray], az_list: List[np.ndarray],
+                       el_list: List[np.ndarray],
+                       norm: str = DEFAULT_FOA_NORM) -> np.ndarray:
     """Sum multiple mono sources into one FOA.
     All sequences must be length-matched; returns [4, T]."""
     assert len(monolist) == len(az_list) == len(el_list)
@@ -709,7 +783,7 @@ def encode_many_to_foa(monolist: List[np.ndarray], az_list: List[np.ndarray], el
     acc = np.zeros((4, T), np.float32)
     for x, az, el in zip(monolist, az_list, el_list):
         assert x.shape[0] == T and az.shape[0] == T and el.shape[0] == T
-        acc += encode_mono_to_foa(x, az, el)
+        acc += encode_mono_to_foa(x, az, el, norm=norm)
     peak = float(np.max(np.abs(acc)))
     if peak > 1.0:
         acc /= (peak * 1.01)
@@ -945,8 +1019,16 @@ def render_foa_from_trajectory(
     reverb_send: float = 0.02,
     doppler: bool = False,
     doppler_max_ratio: float = 0.25,
+    foa_norm: str = DEFAULT_FOA_NORM,
+    peak_dbfs: Optional[float] = None,
 ) -> Dict:
-    """Render mono audio to FOA (4-channel AmbiX) using trajectory.
+    """Render mono audio to FOA (4-channel ACN [W, Y, Z, X]) using trajectory.
+
+    foa_norm: "legacy" (default; ACN/N3D at -3 dB -- what this repo has always
+    written, NOT the AmbiX SN3D the old docstring claimed) or "sn3d" (true
+    AmbiX). See foa_render.FOA_NORMS and docs/ISSUES.md I12.
+    peak_dbfs: if given, scale the finished bed so its peak sits here (e.g.
+    -1.0). Off by default -- the default render is byte-stable. See I16.
 
     gain_mode: "depth_rel" (baseline) | "bbox_area" (A) | "bbox_area_log" (A-log) | "hybrid" (B)
     use_confidence_fade: fade out when tracker confidence is low (off-screen).
@@ -970,7 +1052,7 @@ def render_foa_from_trajectory(
     az_ambiX = -az_s
 
     # Encode to FOA
-    foa = encode_mono_to_foa(audio_proc, az_ambiX, el_s)
+    foa = encode_mono_to_foa(audio_proc, az_ambiX, el_s, norm=foa_norm)
 
     # Apply reverb if requested
     if apply_reverb:
@@ -984,6 +1066,7 @@ def render_foa_from_trajectory(
             learned_model_path=learned_model_path)
         foa = apply_timevarying_reverb_foa(foa, sr, wet_curve, rt60=rt60)
 
+    foa, applied_gain = _apply_peak_normalisation(foa, peak_dbfs)
     write_foa_wav(output_path, foa, sr)
 
     return {
@@ -991,6 +1074,9 @@ def render_foa_from_trajectory(
         "sample_rate": sr,
         "duration_sec": T / sr,
         "num_frames": len(frames),
+        "foa_norm": foa_norm,
+        "peak_dbfs": peak_dbfs,
+        "normalisation_gain": applied_gain,
     }
 
 
@@ -1026,8 +1112,14 @@ def render_binaural_from_trajectory(
     reverb_send: float = 0.02,
     doppler: bool = False,
     doppler_max_ratio: float = 0.25,
+    peak_dbfs: Optional[float] = None,
 ) -> Dict:
     """Render mono audio to HRTF binaural stereo using trajectory.
+
+    peak_dbfs: if given, scale the finished stereo so its peak sits here (e.g.
+    -1.0). Off by default so the default render stays byte-stable. The demo
+    turns it on because it is for listening; stimulus generation must not.
+    See docs/ISSUES.md I16 for the measured level chain.
 
     gain_mode: "depth_rel" (baseline) | "bbox_area" (A) | "bbox_area_log" (A-log) | "hybrid" (B)
     use_confidence_fade: fade out when tracker confidence is low (off-screen).
@@ -1075,10 +1167,12 @@ def render_binaural_from_trajectory(
             rev = fft_convolve(dry, ir)[:T]
             stereo[ch, :T] = (1.0 - wet) * dry + wet * rev
 
-    # Peak normalize
+    # Clip guard: only ever attenuates, so it is not make-up gain.
     peak = float(np.max(np.abs(stereo)) + 1e-9)
     if peak > 1.0:
         stereo = stereo / (peak * 1.01)
+
+    stereo, applied_gain = _apply_peak_normalisation(stereo, peak_dbfs)
 
     sf.write(output_path, stereo.T, sr, subtype="FLOAT")
 
@@ -1088,6 +1182,8 @@ def render_binaural_from_trajectory(
         "sample_rate": sr,
         "duration_sec": T / sr,
         "num_frames": len(frames),
+        "peak_dbfs": peak_dbfs,
+        "normalisation_gain": applied_gain,
     }
 
 

@@ -214,6 +214,16 @@ class SpatialAudioPipeline:
         intr["fov_source"] = cam.fov_source
         intr["fov_detail"] = cam.fov_detail
         intr["motion_mode"] = cam.motion_mode
+        # Which normalisation the WAVs beside this JSON were written with. A
+        # bare "AmbiX" label is what made I12 possible; say it in the data.
+        render = traj.setdefault("render", {})
+        render["foa_norm"] = self.config.spatial.foa_norm
+        render["foa_channel_order"] = "ACN [W, Y, Z, X]"
+        render["foa_norm_detail"] = (
+            "ACN/N3D scaled by 1/sqrt(2); NOT SN3D (docs/ISSUES.md I12)"
+            if self.config.spatial.foa_norm == "legacy"
+            else "ACN/SN3D (AmbiX)")
+        render["peak_dbfs"] = self.config.spatial.peak_dbfs
         return traj
 
     def _apply_camera_motion(self, traj: Dict[str, Any]) -> Dict[str, Any]:
@@ -761,7 +771,8 @@ class SpatialAudioPipeline:
         # AmbiX/SOFA convention: az>0 = LEFT (counterclockwise from front)
         # → must negate before FOA encoding (same as render_foa_from_trajectory)
         print('[info] Encoding to first-order ambisonics...')
-        foa = encode_mono_to_foa(audio_dist, -az_s, el_s)
+        foa = encode_mono_to_foa(audio_dist, -az_s, el_s,
+                                 norm=self.config.spatial.foa_norm)
         return self._apply_foa_air(foa, sr, d_rel_s, occ_s)
 
     def _write_outputs(self, foa: np.ndarray, sr: int):
@@ -772,6 +783,14 @@ class SpatialAudioPipeline:
             foa: FOA audio [4, T]
             sr: Sample rate
         """
+        from .foa_render import _apply_peak_normalisation
+        peak_dbfs = self.config.spatial.peak_dbfs
+        foa, g = _apply_peak_normalisation(foa, peak_dbfs)
+        if peak_dbfs is not None:
+            print(f'[info] Output normalisation: peak -> {peak_dbfs:+.1f} dBFS '
+                  f'(gain x{g:.3f}); stereo and binaural are decoded from the '
+                  f'normalised bed, so their relative levels are unchanged')
+
         # Write FOA
         print(f'[info] Writing FOA to {self.config.output.foa_path}')
         write_foa_wav(self.config.output.foa_path, foa, sr)
@@ -890,7 +909,8 @@ class SpatialAudioPipeline:
 
         print(f'[info] Encoding {len(monos)} sources to first-order ambisonics...')
         # same RIGHT-positive -> AmbiX LEFT-positive negation as the single path
-        foa = encode_many_to_foa(monos, [-a for a in azs], els)
+        foa = encode_many_to_foa(monos, [-a for a in azs], els,
+                                 norm=self.config.spatial.foa_norm)
 
         # AIR / FOA reverb is a property of the room, so it is applied once to
         # the mix, driven by the first source's distance and occlusion curves.

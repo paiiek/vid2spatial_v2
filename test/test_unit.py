@@ -1962,3 +1962,104 @@ class TestCenterLockGate:
         gate = _center_lock_gate_px((0, 0, 41, 16), cache)
         assert 70.0 < gate < 80.0          # 10% of the 734 px diagonal
         assert gate < 230.6, "the observed wrong lock would still pass"
+
+
+class TestFoaNormalisation:
+    """docs/ISSUES.md I12. The default is ACN/N3D at -3 dB, not AmbiX SN3D."""
+
+    @staticmethod
+    def _g(az_deg, el_deg, norm):
+        import math
+        import numpy as np
+        from vid2spatial_pkg.foa_render import dir_to_foa_acn_sn3d_gains
+        return dir_to_foa_acn_sn3d_gains(np.array([math.radians(az_deg)]),
+                                         np.array([math.radians(el_deg)]),
+                                         norm=norm)[:, 0]
+
+    def test_sn3d_is_unity_omni_and_direction_cosines(self):
+        import math
+        W, Y, Z, X = self._g(0.0, 0.0, "sn3d")
+        assert abs(W - 1.0) < 1e-6
+        assert abs(X / W - 1.0) < 1e-6, "SN3D: X/W must be 1.0 on axis"
+        assert abs(Y) < 1e-6 and abs(Z) < 1e-6
+        W, Y, Z, X = self._g(45.0, 0.0, "sn3d")
+        c = math.cos(math.radians(45.0))
+        assert abs(X / W - c) < 1e-6 and abs(Y / W - c) < 1e-6
+        W, Y, Z, X = self._g(0.0, 90.0, "sn3d")
+        assert abs(Z / W - 1.0) < 1e-6
+
+    def test_legacy_is_n3d_over_sqrt2(self):
+        import math
+        W, Y, Z, X = self._g(0.0, 0.0, "legacy")
+        assert abs(W - 1.0 / math.sqrt(2.0)) < 1e-6
+        assert abs(X / W - math.sqrt(3.0)) < 1e-4, "legacy: X/W is sqrt(3)"
+        W, Y, Z, X = self._g(45.0, 0.0, "legacy")
+        assert abs(X / W - math.sqrt(3.0) * math.cos(math.radians(45.0))) < 1e-4
+
+    def test_the_two_norms_differ_by_a_known_factor(self):
+        import math
+        for az, el in ((0, 0), (45, 0), (90, 0), (0, 90), (137, -20)):
+            lg = self._g(az, el, "legacy")
+            sn = self._g(az, el, "sn3d")
+            assert abs(lg[0] / sn[0] - 1.0 / math.sqrt(2.0)) < 1e-6
+            for i in (1, 2, 3):
+                if abs(sn[i]) > 1e-6:
+                    assert abs(lg[i] / sn[i] - math.sqrt(1.5)) < 1e-5
+
+    def test_legacy_encode_is_byte_identical_to_the_unparameterised_call(self):
+        """The default must not have moved: the golden depends on it."""
+        import numpy as np
+        from vid2spatial_pkg.foa_render import encode_mono_to_foa
+        rng = np.random.default_rng(7)
+        T = 4096
+        mono = rng.standard_normal(T).astype(np.float32) * 0.1
+        az = np.linspace(-1.0, 1.0, T).astype(np.float32)
+        el = np.linspace(-0.3, 0.3, T).astype(np.float32)
+        a = encode_mono_to_foa(mono, az, el)
+        b = encode_mono_to_foa(mono, az, el, norm="legacy")
+        assert a.tobytes() == b.tobytes()
+
+    def test_unknown_norm_is_refused(self):
+        import pytest
+        with pytest.raises(ValueError, match="unknown FOA normalisation"):
+            self._g(0.0, 0.0, "fuma")
+
+    def test_config_rejects_a_bad_norm(self):
+        import pytest
+        from vid2spatial_pkg.config import SpatialConfig
+        with pytest.raises(ValueError, match="foa_norm"):
+            SpatialConfig(foa_norm="ambix")
+
+
+class TestPeakNormalisation:
+    """docs/ISSUES.md I16. Opt-in make-up gain, off by default."""
+
+    def test_off_by_default_is_a_no_op(self):
+        import numpy as np
+        from vid2spatial_pkg.foa_render import _apply_peak_normalisation
+        x = (np.random.default_rng(1).standard_normal(512) * 0.001).astype(np.float32)
+        y, g = _apply_peak_normalisation(x, None)
+        assert g == 1.0 and y.tobytes() == x.tobytes()
+
+    def test_hits_the_requested_peak(self):
+        import math
+        import numpy as np
+        from vid2spatial_pkg.foa_render import _apply_peak_normalisation
+        x = (np.random.default_rng(2).standard_normal(4096) * 0.0005).astype(np.float32)
+        for target in (-1.0, -6.0, -20.0):
+            y, g = _apply_peak_normalisation(x, target)
+            got = 20 * math.log10(float(np.max(np.abs(y))))
+            assert abs(got - target) < 0.01, f"{target}: got {got}"
+
+    def test_silence_is_left_alone(self):
+        import numpy as np
+        from vid2spatial_pkg.foa_render import _apply_peak_normalisation
+        x = np.zeros(256, dtype=np.float32)
+        y, g = _apply_peak_normalisation(x, -1.0)
+        assert g == 1.0 and not np.any(y)
+
+    def test_config_rejects_positive_dbfs(self):
+        import pytest
+        from vid2spatial_pkg.config import SpatialConfig
+        with pytest.raises(ValueError, match="peak_dbfs"):
+            SpatialConfig(peak_dbfs=3.0)

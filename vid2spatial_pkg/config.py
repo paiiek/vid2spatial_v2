@@ -128,6 +128,27 @@ class SpatialConfig:
     # Kalman filter smoothing on trajectory (applied after tracking)
     use_kalman_smoothing: bool = True
 
+    # FOA normalisation. "legacy" (default) is ACN/N3D scaled by 1/sqrt(2) --
+    # what this repo has always written, and NOT the AmbiX ACN/SN3D the
+    # docstrings used to claim. "sn3d" is true AmbiX. The default cannot flip
+    # without regenerating the listening-test stimuli and the render golden;
+    # see docs/ISSUES.md I12.
+    foa_norm: str = "legacy"
+
+    # Output peak normalisation in dBFS, e.g. -1.0. None (default) leaves the
+    # render untouched, which is what stimulus generation needs. The web demo
+    # turns it on because it exists to be listened to. See docs/ISSUES.md I16.
+    peak_dbfs: Optional[float] = None
+
+    def __post_init__(self):
+        from .foa_render import FOA_NORMS
+        if self.foa_norm not in FOA_NORMS:
+            raise ValueError(f"foa_norm must be one of {FOA_NORMS}, "
+                             f"got {self.foa_norm!r}")
+        if self.peak_dbfs is not None and self.peak_dbfs > 0.0:
+            raise ValueError(f"peak_dbfs is dBFS and must be <= 0, "
+                             f"got {self.peak_dbfs}")
+
 
 @dataclass
 class MultiSourceConfig:
@@ -321,6 +342,8 @@ class PipelineConfig:
                 dist_lpf_max_hz=args.dist_lpf_max_hz,
                 use_learned_mapping=getattr(args, 'use_learned_mapping', False),
                 use_kalman_smoothing=getattr(args, 'use_kalman_smoothing', True),
+                foa_norm=getattr(args, 'foa_norm', 'legacy'),
+                peak_dbfs=getattr(args, 'peak_dbfs', None),
             ),
             occlusion=OcclusionConfig(
                 enabled=(args.occ_json is not None or args.estimate_occ),
@@ -436,4 +459,18 @@ def add_render_cli_args(parser):
                         "tracker episodes")
     g.add_argument("--doppler", action="store_true", dest="doppler",
                    help="pitch-shift by the radial velocity of the source")
+    g.add_argument("--foa-norm", choices=("legacy", "sn3d"), default="legacy",
+                   dest="foa_norm",
+                   help="FOA normalisation. legacy (default) is ACN/N3D scaled "
+                        "by 1/sqrt(2) -- what this repo has always written, and "
+                        "NOT the AmbiX SN3D it was labelled. sn3d is true AmbiX "
+                        "(W=1, first order = the direction cosines). Channel "
+                        "order is ACN [W,Y,Z,X] either way. See docs/ISSUES.md "
+                        "I12")
+    g.add_argument("--peak-dbfs", type=float, default=None, dest="peak_dbfs",
+                   help="normalise the finished output to this peak in dBFS "
+                        "(e.g. -1). Off by default: the distance law can leave "
+                        "a correct render near -64 dBFS, but adding make-up "
+                        "gain by default would change every existing number. "
+                        "See docs/ISSUES.md I16")
     return parser

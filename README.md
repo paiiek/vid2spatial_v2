@@ -226,7 +226,10 @@ python3 bridge/vid2spatial_osc.py --listen-port 9000 --target-port 9100 \
         --config bridge/config.yaml
 
 # 2. preflight: wire contract, boundary constants, bridge mode, reachability, round-trip
-python3 tools/attach_engine.py --check-engine --host 127.0.0.1 --port 9000
+#    --forward-port must equal the bridge's --target-port, or the round-trip
+#    check listens on the wrong port and calls a working bridge dead.
+python3 tools/attach_engine.py --check-engine --host 127.0.0.1 --port 9000 \
+        --forward-port 9100
 
 # 3. stream a trajectory
 python3 tools/attach_engine.py traj.json --host 127.0.0.1 --port 9000 \
@@ -316,6 +319,19 @@ cd test/demo
 python server.py --port 8090
 # Open http://localhost:8090
 ```
+
+Pick the depth backend in the run panel. `none` (the default) holds the source
+at a fixed distance and finished a 60-frame clip in 30 s; `midas` estimates
+per-frame depth but downloads ~1.3 GB on its first run and took 12.3 min on the
+same clip. The result panel links `traj.json` and plots the azimuth track, and
+the rendered audio is trimmed to the video's duration.
+
+The demo is single-source. Multi-source (`MultiSourceConfig`) is offline-only
+and library-driven: it exports one automation file per ADM object and **has no
+live OSC path** -- the bridge keys every datagram on one tracking id, so
+streaming N sources would collapse them onto object 1 (`docs/ISSUES.md` I3).
+Use `method="yw_sam2"` for multi-source; detection-driven methods ignore the
+per-source boxes.
 
 ---
 

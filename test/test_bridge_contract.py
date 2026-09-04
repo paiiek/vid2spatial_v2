@@ -622,3 +622,50 @@ def test_legacy_spatial_reaches_the_cli():
     assert "--legacy-spatial" in src and "legacy_spatial=args.legacy_spatial" in src
     assert "legacy_spatial" in inspect.signature(m.OSCSpatialSender.__init__).parameters
     assert m.OSCSpatialSender(legacy_spatial=True).config.legacy_spatial is True
+
+
+# ── regressions found in the 2026-09-04 live attach QA ──────────────────────
+
+def test_attach_forward_port_is_configurable_and_defaults_to_9100(contract):
+    """The round-trip probe must listen where the bridge actually forwards.
+
+    It used to bind a hardcoded 9100. Against a bridge on any other
+    --target-port the probe heard nothing and the preflight refused to attach,
+    reporting "the bridge is not forwarding" about a bridge that was.
+    """
+    mod = _attach()
+    assert _defaults(mod)["forward_port"] == 9100
+    assert mod.DEFAULT_FORWARD_PORT == contract["bridge"]["target_port"] == 9100
+    src = (Path(__file__).resolve().parent.parent
+           / "tools" / "attach_engine.py").read_text()
+    assert 'rx.bind(("127.0.0.1", 9100))' not in src, \
+        "round-trip is binding a literal 9100 again"
+
+
+def test_attach_roundtrip_listens_on_the_given_forward_port():
+    """A working bridge on a non-default port must not be called dead."""
+    mod = _attach()
+    port = 24917
+    # No bridge is running, so the probe must time out -- and say WHICH port it
+    # listened on. The old code always said 9100 whatever it was asked for.
+    with pytest.raises(mod.PreflightError) as ei:
+        mod._check_roundtrip("127.0.0.1", 24918, timeout=0.2, forward_port=port)
+    msg = str(ei.value)
+    assert str(port) in msg
+    assert "9100" not in msg
+    assert "--target-port" in msg
+
+
+def test_attach_constants_honour_the_requested_distance_max():
+    """--distance-max-m must reach the boundary check.
+
+    It read OSCConfig() instead, so --legacy-spatial --distance-max-m 20 still
+    failed claiming sender=10.0: the remedy the error text offers ("match the
+    constants") could not be carried out.
+    """
+    mod = _attach()
+    bridge_max = _bridge_spatial_max()
+    note = mod._check_constants(legacy_spatial=True, sender_max=bridge_max)
+    assert "agree" in note
+    with pytest.raises(mod.PreflightError):
+        mod._check_constants(legacy_spatial=True, sender_max=bridge_max / 2.0)

@@ -44,6 +44,10 @@ _REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_REPO))
 
 CONTRACT = _REPO / "vid2spatial_pkg" / "bridge_contract.yaml"
+
+# The bridge's default --target-port, i.e. where the engine listens. Only a
+# default: --forward-port overrides it, because a bridge may target any port.
+DEFAULT_FORWARD_PORT = 9100
 EXTRACTOR = _REPO / "tools" / "extract_bridge_contract.py"
 
 
@@ -67,7 +71,8 @@ def _check_contract() -> str:
     return out.splitlines()[-1] if out else "contract OK"
 
 
-def _check_constants(legacy_spatial: bool = False) -> str:
+def _check_constants(legacy_spatial: bool = False,
+                     sender_max: float | None = None) -> str:
     """Sender and bridge distance laws must agree, or distance is silently rescaled.
 
     The bridge's ``/vid2spatial/spatial`` DISTANCE_MAX_M only matters when that
@@ -77,12 +82,19 @@ def _check_constants(legacy_spatial: bool = False) -> str:
     attaching to a CORRECTLY behaving 20 m engine, so the check now applies
     only under ``--legacy-spatial``, which is the one mode that puts metres on
     the wire for the bridge to renormalise.
+
+    ``sender_max`` is the distance law the stream will ACTUALLY use, i.e.
+    ``--distance-max-m``. Reading ``OSCConfig()`` instead compared the default
+    against the bridge no matter what the operator asked for, so the remedy the
+    error message offers ("match the constants") could never be carried out:
+    ``--legacy-spatial --distance-max-m 20`` still failed claiming sender=10.
     """
     import yaml
     from vid2spatial_pkg.osc_sender import OSCConfig
     doc = yaml.safe_load(CONTRACT.read_text())
     bridge_max = doc["bridge"]["handlers"]["/vid2spatial/spatial"]["dist_max_m"]
-    sender_max = OSCConfig().distance_max_m
+    if sender_max is None:
+        sender_max = OSCConfig().distance_max_m
     if legacy_spatial:
         if sender_max != bridge_max:
             raise PreflightError(
@@ -151,16 +163,28 @@ def _check_reachable(host: str, port: int, timeout: float = 2.0) -> str:
     return f"{host}:{port} accepted UDP (no ICMP refusal)"
 
 
-def _check_roundtrip(host: str, port: int, timeout: float = 2.0) -> str:
-    """Send one frame through the bridge and catch what it forwards on 9100."""
+def _check_roundtrip(host: str, port: int, timeout: float = 2.0,
+                     forward_port: int = DEFAULT_FORWARD_PORT) -> str:
+    """Send one frame through the bridge and catch what it forwards.
+
+    ``forward_port`` must be the bridge's ``--target-port``. It used to be
+    hardcoded to 9100, which broke the check in both directions: against a
+    bridge forwarding anywhere else the probe heard nothing and the preflight
+    refused to attach, blaming a bridge that was in fact working; and in the
+    documented single-engine setup the engine itself holds 9100, so the check
+    silently degraded to a no-op instead of ever proving the path.
+    """
     if host not in ("127.0.0.1", "localhost", "::1"):
         return "round-trip SKIPPED (remote host; cannot bind its forward port)"
     try:
         rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        rx.bind(("127.0.0.1", 9100))
+        rx.bind(("127.0.0.1", forward_port))
     except OSError:
-        return "round-trip SKIPPED (port 9100 already bound — the engine has it)"
+        return (f"round-trip SKIPPED (port {forward_port} already bound — the "
+                f"engine has it, so the bridge's output cannot be observed "
+                f"from here; pass --forward-port if the bridge targets "
+                f"another port)")
     rx.settimeout(timeout)
     try:
         from vid2spatial_pkg.osc_sender import OSCSpatialSender
@@ -178,20 +202,27 @@ def _check_roundtrip(host: str, port: int, timeout: float = 2.0) -> str:
             if addr.startswith("/adm/obj/"):
                 return f"round-trip OK: bridge forwarded {addr}"
         raise PreflightError(
-            "no /adm/obj/N/aed seen on 9100 within "
-            f"{timeout}s — the bridge is not forwarding. Is it running?")
+            f"no /adm/obj/N/aed seen on {forward_port} within {timeout}s. "
+            f"Either the bridge is not running, or it forwards somewhere "
+            f"else — {forward_port} must equal the bridge's --target-port "
+            f"(pass --forward-port to match it).")
     finally:
         rx.close()
 
 
 def preflight(host: str, port: int, *, roundtrip: bool = True,
-              legacy_spatial: bool = False) -> int:
+              legacy_spatial: bool = False,
+              distance_max_m: float | None = None,
+              forward_port: int = DEFAULT_FORWARD_PORT) -> int:
     steps = [("wire contract", lambda: _check_contract()),
-             ("boundary constants", lambda: _check_constants(legacy_spatial)),
+             ("boundary constants",
+              lambda: _check_constants(legacy_spatial, distance_max_m)),
              ("bridge mode", lambda: _check_bridge_mode()),
              ("reachability", lambda: _check_reachable(host, port))]
     if roundtrip:
-        steps.append(("round-trip", lambda: _check_roundtrip(host, port)))
+        steps.append(("round-trip",
+                      lambda: _check_roundtrip(host, port,
+                                               forward_port=forward_port)))
     failed = 0
     for name, fn in steps:
         try:
@@ -300,6 +331,11 @@ def build_parser() -> argparse.ArgumentParser:
                     default="right-positive",
                     help="sign of the azimuth you are feeding (default "
                          "right-positive, the vid2spatial convention)")
+    ap.add_argument("--forward-port", type=int, default=DEFAULT_FORWARD_PORT,
+                    help="the bridge's --target-port, i.e. where it forwards "
+                         "ADM-OSC (default 9100). The round-trip preflight "
+                         "listens here; a mismatch makes a working bridge "
+                         "look dead.")
     ap.add_argument("--check-engine", action="store_true",
                     help="preflight only: contract, constants, reachability, round-trip")
     ap.add_argument("--no-roundtrip", action="store_true",
@@ -328,7 +364,9 @@ def main(argv=None) -> int:
     if args.check_engine:
         print(f"Preflight against {args.host}:{args.port}")
         return preflight(args.host, args.port, roundtrip=not args.no_roundtrip,
-                         legacy_spatial=args.legacy_spatial)
+                         legacy_spatial=args.legacy_spatial,
+                         distance_max_m=args.distance_max_m,
+                         forward_port=args.forward_port)
 
     if args.trajectory is None:
         ap.error("a trajectory file is required unless --check-engine is given")
@@ -336,7 +374,9 @@ def main(argv=None) -> int:
     if not args.skip_preflight and not args.dry_run:
         print(f"Preflight against {args.host}:{args.port}")
         if preflight(args.host, args.port, roundtrip=not args.no_roundtrip,
-                     legacy_spatial=args.legacy_spatial):
+                     legacy_spatial=args.legacy_spatial,
+                     distance_max_m=args.distance_max_m,
+                     forward_port=args.forward_port):
             return 1
         print()
 

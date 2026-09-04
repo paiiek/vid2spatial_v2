@@ -42,6 +42,15 @@ Both rows: 13485 records over 225 tracks.
 
 The `z0` estimate itself: AbsRel 0.230 mean, 0.202 median, δ1 0.529, over 225 tracks.
 
+How that `z0` error depends on the alignment, reported for comparison; the shipped `z0` uses the two-parameter affine, fitted against GT once:
+
+| `z0` alignment | free params | AbsRel mean | AbsRel median | δ1 |
+|---|---|---|---|---|
+| **Affine `1/z = a·d + b` (shipped)** | 2 | **0.230** | 0.202 | 0.529 |
+| Median scale `z = s/d` (comparison) | 1 | 0.264 | 0.242 | 0.453 |
+
+The one-parameter fit is worse on every column, so the affine's shift term is buying real accuracy rather than only degrees of freedom. Both still consume ground truth once; neither is metric depth from the model.
+
 ## Reading
 
 The proxy is `z = z0·sqrt(A0/A)`, so a `z0` error is a pure **scale** error on

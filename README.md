@@ -276,6 +276,7 @@ changed port, or renamed address fails.
 ```bash
 python tools/verify_depth_heuristic.py            # synthetic pinhole checks (CPU, <1s)
 python tools/verify_depth_heuristic.py --gt gt.json   # [{area, depth_m}] → MAE / AbsRel / Spearman
+python tools/fetch_kitti_frames.py --out DIR          # KITTI frames by HTTP range out of the 15.8 GB image zip (idempotent, skips frames already present)
 ```
 
 The bbox-area depth proxy (`depth_utils.compute_bbox_scale_proxy`, z ∝ 1/√area)

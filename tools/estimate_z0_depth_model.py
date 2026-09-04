@@ -203,15 +203,34 @@ def main(argv=None) -> int:
     inv = a_c * dd + b_c
     z0 = 1.0 / np.clip(inv, 1.0 / 200.0, 1.0 / 0.5)
 
+    # Comparison: median-scale alignment, the one-parameter alternative (scale
+    # only, no shift). Reported so the affine's extra free parameter is visible
+    # rather than implicit; the shipped z0 uses the affine above.
+    z_rel = 1.0 / np.maximum(dd, 1e-6)
+    z_med = np.clip(float(np.median(zz) / np.median(z_rel)) * z_rel, 0.5, 200.0)
+    rel_med = np.abs(z_med - zz) / zz
+
     rel = np.abs(z0 - zz) / zz
     out = {
         "model": "Depth Anything V2 ViT-S (relative), " + CKPT,
         "alignment": {
+            "method": "least-squares affine on inverse depth",
             "form": "1/z = a*disparity + b, one global fit over all tracks",
             "a": float(a_c), "b": float(b_c),
+            "n_free_parameters": 2,
             "note": "NOT metric depth from the model; a global affine fitted "
                     "against the GT once, the standard affine-invariant protocol. "
-                    "It replaces a per-track oracle z0 with two dataset-wide numbers.",
+                    "It replaces a per-track oracle z0 with two dataset-wide numbers. "
+                    "This is a two-parameter scale-AND-shift fit, NOT median scaling.",
+        },
+        "alignment_alternative_median_scale": {
+            "method": "median-scale on relative depth (scale only, no shift)",
+            "form": "z = s / disparity, s = median(z_gt) / median(1/disparity)",
+            "n_free_parameters": 1,
+            "z0_abs_rel_mean": float(rel_med.mean()),
+            "z0_abs_rel_median": float(np.median(rel_med)),
+            "z0_delta1": float(np.mean(np.maximum(z_med / zz, zz / z_med) < 1.25)),
+            "note": "Reported for comparison only; the shipped z0 uses the affine.",
         },
         "n_tracks": len(keys),
         "z0_abs_rel_mean": float(rel.mean()),

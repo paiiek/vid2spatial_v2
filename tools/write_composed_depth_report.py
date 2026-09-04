@@ -75,6 +75,30 @@ def main(argv=None) -> int:
     }
 
     z0a = z0doc.get("alignment", {})
+
+    def _alignment_rows(doc):
+        """Affine vs median-scale z0 alignment, if the estimator recorded both."""
+        alt = doc.get("alignment_alternative_median_scale")
+        if not alt:
+            return []
+        return [
+            "How that `z0` error depends on the alignment, reported for comparison; "
+            "the shipped `z0` uses the two-parameter affine, fitted against GT once:",
+            "",
+            "| `z0` alignment | free params | AbsRel mean | AbsRel median | δ1 |",
+            "|---|---|---|---|---|",
+            f"| **Affine `1/z = a·d + b` (shipped)** | 2 | "
+            f"**{fmt(doc.get('z0_abs_rel_mean'))}** | {fmt(doc.get('z0_abs_rel_median'))} | "
+            f"{fmt(doc.get('z0_delta1'))} |",
+            f"| Median scale `z = s/d` (comparison) | 1 | {fmt(alt.get('z0_abs_rel_mean'))} | "
+            f"{fmt(alt.get('z0_abs_rel_median'))} | {fmt(alt.get('z0_delta1'))} |",
+            "",
+            "The one-parameter fit is worse on every column, so the affine's shift term is "
+            "buying real accuracy rather than only degrees of freedom. Both still consume "
+            "ground truth once; neither is metric depth from the model.",
+            "",
+        ]
+
     L = [
         "# Composed distance accuracy on KITTI Tracking — depth model ⊕ bbox-area proxy",
         "",
@@ -127,6 +151,7 @@ def main(argv=None) -> int:
         f"{fmt(z0doc.get('z0_abs_rel_median'))} median, δ1 {fmt(z0doc.get('z0_delta1'))}, "
         f"over {z0doc.get('n_tracks')} tracks.",
         "",
+        *_alignment_rows(z0doc),
         "## Reading",
         "",
         "The proxy is `z = z0·sqrt(A0/A)`, so a `z0` error is a pure **scale** error on",
